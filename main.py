@@ -1,6 +1,7 @@
 import os
 import re
 import calendar
+import json
 import requests
 from datetime import datetime, timedelta
 
@@ -55,7 +56,7 @@ def get_active_s50_symbols():
         symbols.append(f"S50{c}{yr}")
     return list(dict.fromkeys(symbols))
 
-def fetch_data_via_browser():
+def fetch_data_hybrid():
     from playwright.sync_api import sync_playwright
 
     set_data = {
@@ -82,97 +83,111 @@ def fetch_data_via_browser():
         )
         page = context.new_page()
 
-        # 1. ดึงประเภทนักลงทุน SET จากหน้าเว็บโดยตรง
+        # 1. โหลดหน้าหลักเพื่อตั้งค่า Cookies และ Intercept API
+        print("กำลังดึงประเภทนักลงทุน...")
+        api_responses = {}
+
+        def handle_response(response):
+            if "api/set/market/investor-type" in response.url:
+                try:
+                    api_responses["set_investor"] = response.json()
+                except Exception:
+                    pass
+            elif "api/tfex/market/investor-type" in response.url:
+                try:
+                    api_responses["tfex_investor"] = response.json()
+                except Exception:
+                    pass
+
+        page.on("response", handle_response)
+
         try:
-            print("กำลังดึงข้อมูล SET Investor Type...")
-            page.goto("https://www.settrade.com/th/equities/market-data/investor-type", wait_until="networkidle", timeout=30000)
-            page.wait_for_timeout(3000)
-            
-            rows = page.locator("table tbody tr").all()
-            for row in rows:
-                text = row.inner_text()
-                parts = [p.strip() for p in text.split('\t') if p.strip()]
-                if len(parts) >= 2:
-                    name = parts[0]
-                    net = parts[-1] # ค่าสุทธิมักจะอยู่คอลัมน์สุดท้าย
+            page.goto("https://www.settrade.com/th/equities/market-data/investor-type", wait_until="domcontentloaded", timeout=15000)
+            page.wait_for_timeout(2000)
+        except Exception as e:
+            print(f"Error navigating SET Investor: {e}")
+
+        try:
+            page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="domcontentloaded", timeout=15000)
+            page.wait_for_timeout(2000)
+        except Exception as e:
+            print(f"Error navigating TFEX Investor: {e}")
+
+        # ประมวลผล SET Investor Data
+        set_json = api_responses.get("set_investor")
+        if set_json:
+            items = set_json if isinstance(set_json, list) else set_json.get("investorTypes", set_json.get("data", []))
+            if isinstance(items, list):
+                for item in items:
+                    name = str(item.get("investorTypeName", item.get("name", "")))
+                    net_val = item.get("netValue", item.get("net", "-"))
+                    if isinstance(net_val, (int, float)):
+                        net_val = f"{net_val:+,.2f}"
+
                     if "สถาบัน" in name:
-                        set_data["นักลงทุนสถาบัน"] = net
-                    elif "บริษัทหลักทรัพย์" in name or "บัญชี บล." in name:
-                        set_data["บัญชีบริษัทหลักทรัพย์"] = net
-                    elif "ต่างประเทศ" in name or "ต่างชาติ" in name:
-                        set_data["นักลงทุนต่างชาติ"] = net
-                    elif "ในประเทศ" in name or "ทั่วไป" in name:
-                        set_data["นักลงทุนภายในประเทศ"] = net
-            print(f"✅ SET Investor: {set_data}")
-        except Exception as e:
-            print(f"❌ Error SET Investor: {e}")
+                        set_data["นักลงทุนสถาบัน"] = net_val
+                    elif "บริษัทหลักทรัพย์" in name or "บัญชี บล." in name or "Prop" in name:
+                        set_data["บัญชีบริษัทหลักทรัพย์"] = net_val
+                    elif "ต่างประเทศ" in name or "ต่างชาติ" in name or "Foreign" in name:
+                        set_data["นักลงทุนต่างชาติ"] = net_val
+                    elif "ในประเทศ" in name or "ทั่วไป" in name or "Retail" in name:
+                        set_data["นักลงทุนภายในประเทศ"] = net_val
 
-        # 2. ดึงประเภทนักลงทุน TFEX จากหน้าเว็บ
-        try:
-            print("กำลังดึงข้อมูล TFEX Investor Type...")
-            page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="networkidle", timeout=30000)
-            page.wait_for_timeout(3000)
-            
-            rows = page.locator("table tbody tr").all()
-            cats = ["Equity Index Futures", "Single Stock Futures", "Currency Futures", "Equity Index Call Options", "Equity Index Put Options"]
-            
-            for row in rows:
-                text = row.inner_text()
-                for cat in cats:
-                    if cat in text:
-                        cols = [c.strip() for c in text.split('\n') if c.strip()]
-                        # หากแยกด้วย newline ไม่ได้ ให้ลอง split ด้วย tab
-                        if len(cols) < 4:
-                            cols = [c.strip() for c in text.split('\t') if c.strip()]
-                        
-                        # ค่าจะเรียง: สถาบัน, ต่างชาติ, ในประเทศ
-                        nums = [c for c in cols if re.match(r'^[\+\-0-9\,\.]+$', c)]
-                        if len(nums) >= 3:
-                            tfex_data["นักลงทุนสถาบัน"][cat] = nums[0]
-                            tfex_data["นักลงทุนต่างชาติ"][cat] = nums[1]
-                            tfex_data["นักลงทุนภายในประเทศ"][cat] = nums[2]
-            print("✅ TFEX Investor Data Fetched")
-        except Exception as e:
-            print(f"❌ Error TFEX Investor: {e}")
+        # ประมวลผล TFEX Investor Data
+        tfex_json = api_responses.get("tfex_investor")
+        if tfex_json:
+            items = tfex_json if isinstance(tfex_json, list) else tfex_json.get("investorTypes", tfex_json.get("data", []))
+            if isinstance(items, list):
+                for item in items:
+                    cat = item.get("categoryName", item.get("productGroup", item.get("product", "")))
+                    inst = item.get("institutionNet", item.get("instNet", "-"))
+                    foreign = item.get("foreignNet", item.get("foreignNetValue", "-"))
+                    retail = item.get("retailNet", item.get("localNet", "-"))
 
-        # 3. ดึงสัญญา SET50 Futures รายตัว
+                    tfex_data["นักลงทุนสถาบัน"][cat] = f"{inst:+,.0f}" if isinstance(inst, (int, float)) else str(inst)
+                    tfex_data["นักลงทุนต่างชาติ"][cat] = f"{foreign:+,.0f}" if isinstance(foreign, (int, float)) else str(foreign)
+                    tfex_data["นักลงทุนภายในประเทศ"][cat] = f"{retail:+,.0f}" if isinstance(retail, (int, float)) else str(retail)
+
+        # 2. ดึงข้อมูลสัญญา SET50 Futures รายตัว (ใช้วิธี API Direct จาก Context)
         symbols = get_active_s50_symbols()
-        print(f"กำลังดึงสัญญา SET50: {symbols}")
+        print(f"กำลังดึงข้อมูลสัญญา SET50: {symbols}")
+
         for sym in symbols:
             try:
-                page.goto(f"https://www.settrade.com/th/derivatives/quote/{sym}/overview", wait_until="networkidle", timeout=20000)
-                page.wait_for_timeout(2000)
-                body_text = page.locator("body").inner_text()
+                api_url = f"https://api.settrade.com/api/tfex/quote/{sym}/overview"
+                res = page.request.get(api_url)
+                if res.ok:
+                    d = res.json()
+                    last = d.get("last", d.get("lastPrice", "-"))
+                    change = d.get("change", 0)
+                    change_pct = d.get("percentChange", d.get("changePercent", 0))
+                    high = d.get("high", d.get("highPrice", "-"))
+                    low = d.get("low", d.get("lowPrice", "-"))
+                    avg = d.get("averagePrice", d.get("avg", "-"))
+                    open_p = d.get("open", d.get("openPrice", "-"))
+                    vol = d.get("totalVolume", d.get("volume", 0))
+                    oi = d.get("openInterest", d.get("oi", 0))
 
-                def get_value(pattern, default="-"):
-                    m = re.search(pattern, body_text)
-                    return m.group(1).strip() if m else default
+                    v_num = int(vol) if isinstance(vol, (int, float)) else 0
+                    o_num = int(oi) if isinstance(oi, (int, float)) else 0
+                    change_str = f"{change:+.2f} ({change_pct:+.2f}%)" if isinstance(change, (int, float)) else "-"
+                    rem = calculate_remaining_days(sym)
 
-                last = get_value(r'ล่าสุด\s*([0-9\,\.]+)')
-                if last == "-":
-                    last = get_value(r'([0-9\,\.]+)\s*[\+\-]\d+')
-
-                change_pct = get_value(r'([\+\-][0-9\,\.]+\s*\([\+\-][0-9\,\.]%\))')
-                high = get_value(r'ราคาสูงสุด\s*([0-9\,\.]+)')
-                low = get_value(r'ราคาต่ำสุด\s*([0-9\,\.]+)')
-                avg = get_value(r'ราคาเฉลี่ย\s*([0-9\,\.]+)')
-                open_p = get_value(r'ราคาเปิด\s*([0-9\,\.]+)')
-                vol = get_value(r'ปริมาณ\s*\(สัญญา\)\s*([0-9\,]+)')
-                oi = get_value(r'สถานะคงค้าง\s*\(สัญญา\)\s*([0-9\,]+)')
-
-                v_num = int(vol.replace(',', '')) if vol.replace(',', '').isdigit() else 0
-                o_num = int(oi.replace(',', '')) if oi.replace(',', '').isdigit() else 0
-                rem = calculate_remaining_days(sym)
-
-                if last != "-" or o_num > 0 or v_num > 0:
-                    results.append({
-                        "symbol": sym, "remaining_days": rem, "last": last, "change_pct": change_pct,
-                        "high": high, "low": low, "avg": avg, "open": open_p, "vol": vol, "oi": oi,
-                        "vol_num": v_num, "oi_num": o_num
-                    })
-                    total_vol += v_num
-                    total_oi += o_num
-                    print(f"  + {sym}: Last={last}, OI={oi}")
+                    if o_num > 0 or v_num > 0 or last != "-":
+                        results.append({
+                            "symbol": sym, "remaining_days": rem,
+                            "last": f"{last:,.2f}" if isinstance(last, (int, float)) else str(last),
+                            "change_pct": change_str,
+                            "high": f"{high:,.2f}" if isinstance(high, (int, float)) else str(high),
+                            "low": f"{low:,.2f}" if isinstance(low, (int, float)) else str(low),
+                            "avg": f"{avg:,.2f}" if isinstance(avg, (int, float)) else str(avg),
+                            "open": f"{open_p:,.2f}" if isinstance(open_p, (int, float)) else str(open_p),
+                            "vol": f"{v_num:,}", "oi": f"{o_num:,}",
+                            "vol_num": v_num, "oi_num": o_num
+                        })
+                        total_vol += v_num
+                        total_oi += o_num
+                        print(f"  + {sym}: Last={last}, OI={oi}")
             except Exception as e:
                 print(f"  - ข้าม {sym}: {e}")
 
@@ -231,7 +246,7 @@ def send_line_message(message):
     print(f"--- LINE API RESULT --- Code: {res.status_code}")
 
 if __name__ == "__main__":
-    results, total_vol, total_oi, set_data, tfex_data = fetch_data_via_browser()
+    results, total_vol, total_oi, set_data, tfex_data = fetch_data_hybrid()
     msg = format_line_message(results, total_vol, total_oi, set_data, tfex_data)
     send_line_message(msg)
     print("ทำงานเสร็จสิ้น!")
