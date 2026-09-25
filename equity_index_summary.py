@@ -21,42 +21,6 @@ def fetch_equity_index_data():
     equity_data = {}
     print("กำลังดึงข้อมูลมูลค่าการซื้อขายตลาดหุ้น (SET)...")
     
-    # 1. พยายามยิงดึงจาก SET API โดยตรงก่อน (ไวและไม่ติด Browser Timeout)
-    api_urls = [
-        "https://api.settrade.com/api/market/investor-type/set",
-        "https://api.settrade.com/api/set/investor-type"
-    ]
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://www.settrade.com/"
-    }
-    
-    for url in api_urls:
-        try:
-            res = requests.get(url, headers=headers, timeout=8)
-            if res.status_code == 200:
-                data = res.json()
-                items = data.get("data", []) if isinstance(data.get("data"), list) else data.get("investorTypes", [])
-                for item in items:
-                    name = item.get("investorTypeName", "") or item.get("name", "")
-                    net = item.get("netBuySell", 0) or item.get("netValue", 0)
-                    
-                    if "ต่างชาติ" in name or "ต่างประเทศ" in name:
-                        equity_data["นักลงทุนต่างชาติ"] = format_number_with_sign(str(net))
-                    elif "สถาบัน" in name:
-                        equity_data["นักลงทุนสถาบัน"] = format_number_with_sign(str(net))
-                    elif "ส่วนบุคคล" in name or "ภายในประเทศ" in name or "รายย่อย" in name:
-                        equity_data["นักลงทุนภายในประเทศ"] = format_number_with_sign(str(net))
-                    elif "บัญชีบริษัทหลักทรัพย์" in name or "บล." in name:
-                        equity_data["บัญชีบริษัทหลักทรัพย์"] = format_number_with_sign(str(net))
-                
-                if len(equity_data) >= 4:
-                    print("ดึงข้อมูล SET ผ่าน API สำเร็จ")
-                    return equity_data
-        except Exception:
-            pass
-
-    # 2. Fallback: ใช้ Playwright ดึงจาก URL historical-report
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -66,7 +30,6 @@ def fetch_equity_index_data():
         page = context.new_page()
 
         try:
-            # ใช้ domcontentloaded เพื่อป้องกัน timeout จาก networkidle
             page.goto("https://www.settrade.com/th/equities/market-data/historical-report/investor-type", wait_until="domcontentloaded", timeout=45000)
             time.sleep(6)
             
@@ -78,19 +41,30 @@ def fetch_equity_index_data():
             rows = page.locator("tr").all()
             for r in rows:
                 row_text = " ".join(r.text_content().split())
-                nums = re.findall(r'[-+]?\d{1,3}(?:,\d{3})*(?:\.\d+)?|-', row_text)
-                if not nums:
-                    continue
                 
-                val = format_number_with_sign(nums[-1])
-                if "ต่างชาติ" in row_text or "ต่างประเทศ" in row_text:
-                    equity_data["นักลงทุนต่างชาติ"] = val
-                elif "สถาบัน" in row_text:
-                    equity_data["นักลงทุนสถาบัน"] = val
-                elif "ภายในประเทศ" in row_text or "ส่วนบุคคล" in row_text or "รายย่อย" in row_text:
-                    equity_data["นักลงทุนภายในประเทศ"] = val
+                # ตรวจจับแถวกลุ่มนักลงทุน
+                matched_key = None
+                if "สถาบันในประเทศ" in row_text or "สถาบัน" in row_text:
+                    matched_key = "นักลงทุนสถาบัน"
                 elif "บัญชีบริษัทหลักทรัพย์" in row_text or "หลักทรัพย์" in row_text:
-                    equity_data["บัญชีบริษัทหลักทรัพย์"] = val
+                    matched_key = "บัญชีบริษัทหลักทรัพย์"
+                elif "นักลงทุนต่างประเทศ" in row_text or "ต่างชาติ" in row_text:
+                    matched_key = "นักลงทุนต่างชาติ"
+                elif "นักลงทุนทั่วไปในประเทศ" in row_text or "ภายในประเทศ" in row_text:
+                    matched_key = "นักลงทุนภายในประเทศ"
+                
+                if matched_key:
+                    # ดึง td ทั้งหมดในแถวนั้นเพื่อหาคอลัมน์สุทธิรายวัน
+                    tds = r.locator("td").all()
+                    if len(tds) >= 5:
+                        # คอลัมน์ที่ 5 (index 4) คือ ยอดสุทธิรายวัน
+                        daily_net_text = tds[4].text_content().strip()
+                        equity_data[matched_key] = format_number_with_sign(daily_net_text)
+                    else:
+                        # สำรองกรณีดึง td ไม่ได้ ใช้ regex ดึงตัวเลขกลุ่มแรกๆ (สุทธิรายวันคือตัวเลขที่ 5 ของแถว)
+                        nums = re.findall(r'[-+]?\d{1,3}(?:,\d{3})*(?:\.\d+)?|-', row_text)
+                        if len(nums) >= 5:
+                            equity_data[matched_key] = format_number_with_sign(nums[4])
 
         except Exception as e:
             print(f"Playwright SET Error: {e}")
