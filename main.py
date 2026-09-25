@@ -55,14 +55,18 @@ def get_all_s50_symbols(page):
     """1. ดึงรายชื่อสัญญา SET50 ทั้งหมด"""
     list_url = "https://www.settrade.com/th/derivatives/market-data/trading-quotation-by-series"
     print("กำลังดึงรายชื่อสัญญา SET50 ทั้งหมด...")
-    page.goto(list_url, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_selector("table", timeout=30000)
-    time.sleep(3)
-    
-    text_content = page.locator("body").inner_text()
-    symbols = list(dict.fromkeys(re.findall(r'S50[A-Z0-9]+', text_content)))
-    print(f"พบสัญญา SET50 ทั้งหมด {len(symbols)} รายการ: {symbols}")
-    return symbols
+    try:
+        page.goto(list_url, wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_selector("table", timeout=15000)
+        time.sleep(2)
+        
+        text_content = page.locator("body").inner_text()
+        symbols = list(dict.fromkeys(re.findall(r'S50[A-Z0-9]+', text_content)))
+        print(f"พบสัญญา SET50 ทั้งหมด {len(symbols)} รายการ: {symbols}")
+        return symbols
+    except Exception as e:
+        print(f"เกิดข้อผิดพลาดในการดึงสัญลักษณ์ SET50: {e}")
+        return []
 
 def get_symbol_overview_data(page, symbol):
     """2. ดึงข้อมูลราคาและ OI ของแต่ละสัญญา"""
@@ -70,8 +74,8 @@ def get_symbol_overview_data(page, symbol):
     print(f"กำลังดึงข้อมูลหน้า Overview ของ {symbol}...")
     
     try:
-        page.goto(quote_url, wait_until="domcontentloaded", timeout=30000)
-        time.sleep(2)
+        page.goto(quote_url, wait_until="domcontentloaded", timeout=20000)
+        time.sleep(1.5)
         
         body_text = page.locator("body").inner_text()
         
@@ -112,7 +116,7 @@ def get_symbol_overview_data(page, symbol):
         return None
 
 def fetch_investor_type_data(page):
-    """3. ดึงข้อมูลประเภทนักลงทุนทั้งจาก SET (รายวัน) และ TFEX"""
+    """3. ดึงข้อมูลประเภทนักลงทุนทั้งจาก SET (รายวัน คอลัมน์สุทธิ) และ TFEX"""
     print("กำลังดึงข้อมูลประเภทนักลงทุน SET & TFEX...")
     
     set_data = {
@@ -128,20 +132,22 @@ def fetch_investor_type_data(page):
         "นักลงทุนภายในประเทศ": {}
     }
 
-    # 3.1 ดึงข้อมูล SET (Equity Index) รายวัน
+    # 3.1 ดึงข้อมูล SET (Equity Index) - ใช้ domcontentloaded เลี่ยง Timeout
     try:
         set_url = "https://www.settrade.com/th/equities/market-data/historical-report/investor-type"
-        page.goto(set_url, wait_until="networkidle", timeout=60000)
-        page.wait_for_selector("table tbody tr", timeout=30000)
-        time.sleep(3)
+        page.goto(set_url, wait_until="domcontentloaded", timeout=30000)
+        
+        # รอให้ตารางโหลดแสดงผลจริง
+        page.wait_for_selector("table tbody tr td", timeout=20000)
+        time.sleep(2)
         
         rows = page.locator("table tbody tr").all()
         for row in rows:
             tds = row.locator("td").all()
+            # ตาราง SET คอลัมน์: [นักลงทุน, มูลค่าซื้อ, %, มูลค่าขาย, %, สุทธิ(รายวัน), ...]
             if len(tds) >= 6:
                 inv_type = tds[0].inner_text().strip()
-                # ช่อง "สุทธิ" รายวัน จะเป็น td ลำดับที่ 6 (Index 5)
-                daily_net = tds[5].inner_text().strip()
+                daily_net = tds[5].inner_text().strip()  # Index 5 = คอลัมน์สุทธิ ของรายวัน
                 
                 if "สถาบัน" in inv_type:
                     set_data["นักลงทุนสถาบัน"] = daily_net
@@ -151,15 +157,17 @@ def fetch_investor_type_data(page):
                     set_data["นักลงทุนต่างชาติ"] = daily_net
                 elif "ในประเทศ" in inv_type or "ทั่วไป" in inv_type:
                     set_data["นักลงทุนภายในประเทศ"] = daily_net
+        print(f"ดึงข้อมูล SET สำเร็จ: {set_data}")
     except Exception as e:
         print(f"ข้อผิดพลาดขณะดึงข้อมูล SET: {e}")
 
-    # 3.2 ดึงข้อมูล TFEX Derivatives
+    # 3.2 ดึงข้อมูล TFEX Derivatives - ใช้ domcontentloaded เลี่ยง Timeout
     try:
         tfex_url = "https://www.settrade.com/th/derivatives/market-data/investor-type"
-        page.goto(tfex_url, wait_until="networkidle", timeout=60000)
-        page.wait_for_selector("table tbody tr", timeout=30000)
-        time.sleep(3)
+        page.goto(tfex_url, wait_until="domcontentloaded", timeout=30000)
+        
+        page.wait_for_selector("table tbody tr td", timeout=20000)
+        time.sleep(2)
         
         categories = [
             "Equity Index Futures", 
@@ -182,6 +190,7 @@ def fetch_investor_type_data(page):
                         tfex_data["นักลงทุนต่างชาติ"][cat] = nums[5]
                         tfex_data["นักลงทุนภายในประเทศ"][cat] = nums[8]
                     break
+        print("ดึงข้อมูล TFEX สำเร็จ")
     except Exception as e:
         print(f"ข้อผิดพลาดขณะดึงข้อมูล TFEX: {e}")
 
