@@ -1,17 +1,31 @@
 import os
 import re
+import time
 import calendar
-import json
 import requests
 from datetime import datetime, timedelta
+from playwright.sync_api import sync_playwright
 
 # รหัสเดือนของ TFEX
 MONTH_MAP = {
-    'F': 1, 'G': 2, 'H': 3, 'J': 4, 'K': 5, 'M': 6,
-    'N': 7, 'Q': 8, 'U': 9, 'V': 10, 'X': 11, 'Z': 12
+    'F': 1,  # ม.ค.
+    'G': 2,  # ก.พ.
+    'H': 3,  # มี.ค.
+    'J': 4,  # เม.ย.
+    'K': 5,  # พ.ค.
+    'M': 6,  # มิ.ย.
+    'N': 7,  # ก.ค.
+    'Q': 8,  # ส.ค.
+    'U': 9,  # ก.ย.
+    'V': 10, # ต.ค.
+    'X': 11, # พ.ย.
+    'Z': 12  # ธ.ค.
 }
 
 def get_last_trading_day(symbol):
+    """
+    คำนวณวันทำการก่อนวันสุดท้ายของเดือน จากชื่อสัญญา (เช่น S50U26, S50M27)
+    """
     match = re.match(r'S50([A-Z])(\d{2})', symbol)
     if not match:
         return None
@@ -22,12 +36,16 @@ def get_last_trading_day(symbol):
         return None
     
     year = 2000 + int(year_code)
+    
+    # หาวันที่สุดท้ายของเดือน
     _, last_day = calendar.monthrange(year, month)
     dt = datetime(year, month, last_day)
     
-    while dt.weekday() >= 5:
+    # หาวันทำการสุดท้าย (ถ้าเป็น ส.-อา. ให้ถอยกลับมาวันศุกร์)
+    while dt.weekday() >= 5: # 5 = เสาร์, 6 = อาทิตย์
         dt -= timedelta(days=1)
         
+    # ถอยลงมาอีก 1 วันทำการ เพื่อให้เป็น "วันทำการก่อนวันสุดท้าย"
     dt -= timedelta(days=1)
     while dt.weekday() >= 5:
         dt -= timedelta(days=1)
@@ -35,192 +53,119 @@ def get_last_trading_day(symbol):
     return dt
 
 def calculate_remaining_days(symbol):
+    """คำนวณจำนวนวันคงเหลือจากวันปัจจุบัน ไปจนถึงวันทำการก่อนวันสุดท้าย"""
     last_trade_dt = get_last_trading_day(symbol)
     if not last_trade_dt:
         return "-"
     
     today = datetime.now().date()
     target_date = last_trade_dt.date()
+    
     delta = (target_date - today).days
     if delta < 0:
         return "หมดอายุแล้ว"
     return f"{delta} วัน"
 
-def get_active_s50_symbols():
-    now = datetime.now()
-    curr_yr = str(now.year)[2:]
-    next_yr = str(now.year + 1)[2:]
-    symbols = []
-    for c in ['U', 'V', 'X', 'Z', 'H', 'M']:
-        yr = curr_yr if c in ['U', 'V', 'X', 'Z'] else next_yr
-        symbols.append(f"S50{c}{yr}")
-    return list(dict.fromkeys(symbols))
+def get_all_s50_symbols(page):
+    """1. ดึงรายชื่อสัญญาทั้งหมดจากหน้าตารางรวม"""
+    list_url = "https://www.settrade.com/th/derivatives/market-data/trading-quotation-by-series"
+    print("กำลังดึงรายชื่อสัญญา SET50 ทั้งหมด...")
+    page.goto(list_url, wait_until="domcontentloaded", timeout=60000)
+    page.wait_for_selector("table", timeout=30000)
+    time.sleep(3)
+    
+    text_content = page.locator("body").inner_text()
+    symbols = list(dict.fromkeys(re.findall(r'S50[A-Z0-9]+', text_content)))
+    print(f"พบสัญญา SET50 ทั้งหมด {len(symbols)} รายการ: {symbols}")
+    return symbols
+
+def get_symbol_overview_data(page, symbol):
+    """2. เข้าหน้า Overview ของแต่ละสัญญาเพื่อแกะค่าตัวเลข"""
+    quote_url = f"https://www.settrade.com/th/derivatives/quote/{symbol}/overview"
+    print(f"กำลังดึงข้อมูลหน้า Overview ของ {symbol}...")
+    
+    try:
+        page.goto(quote_url, wait_until="domcontentloaded", timeout=30000)
+        time.sleep(3) # รอให้ตัวเลข dynamic โหลดครบ
+        
+        body_text = page.locator("body").inner_text()
+        
+        def extract_val(pattern, text, default="-"):
+            m = re.search(pattern, text)
+            return m.group(1).strip() if m else default
+
+        # แกะค่าตัวเลขราคาและปริมาณ
+        last = extract_val(r'([0-9\,\.]+)\s*[\+\-]\d+', body_text)
+        change_pct = extract_val(r'([\+\-][0-9\,\.]+\s*\([\+\-][0-9\,\.]%\))', body_text)
+        high = extract_val(r'ราคาสูงสุด\s*([0-9\,\.]+)', body_text)
+        low = extract_val(r'ราคาต่ำสุด\s*([0-9\,\.]+)', body_text)
+        avg = extract_val(r'ราคาเฉลี่ย\s*([0-9\,\.]+)', body_text)
+        open_p = extract_val(r'ราคาเปิด\s*([0-9\,\.]+)', body_text)
+        vol = extract_val(r'ปริมาณ\s*\(สัญญา\)\s*([0-9\,]+)', body_text)
+        oi = extract_val(r'สถานะคงค้าง\s*\(สัญญา\)\s*([0-9\,]+)', body_text)
+        
+        # คำนวณวันคงเหลือจาก Symbol โดยตรง
+        remaining_days_str = calculate_remaining_days(symbol)
+
+        vol_num = int(vol.replace(',', '')) if vol.replace(',', '').isdigit() else 0
+        oi_num = int(oi.replace(',', '')) if oi.replace(',', '').isdigit() else 0
+
+        return {
+            "symbol": symbol,
+            "remaining_days": remaining_days_str,
+            "last": last,
+            "change_pct": change_pct,
+            "high": high,
+            "low": low,
+            "avg": avg,
+            "open": open_p,
+            "vol": vol,
+            "oi": oi,
+            "vol_num": vol_num,
+            "oi_num": oi_num
+        }
+    except Exception as e:
+        print(f"ไม่สามารถดึงข้อมูลของ {symbol} ได้: {e}")
+        return None
 
 def fetch_all_data():
-    from playwright.sync_api import sync_playwright
-
-    set_data = {
-        "นักลงทุนสถาบัน": "-",
-        "บัญชีบริษัทหลักทรัพย์": "-",
-        "นักลงทุนต่างชาติ": "-",
-        "นักลงทุนภายในประเทศ": "-"
-    }
-    tfex_data = {
-        "นักลงทุนสถาบัน": {},
-        "นักลงทุนต่างชาติ": {},
-        "บัญชีบริษัทหลักทรัพย์": {},
-        "นักลงทุนภายในประเทศ": {}
-    }
-    results = []
-    total_vol = 0
-    total_oi = 0
-
+    """3. บริหารการดึงข้อมูลทีละตัวจนครบ"""
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled"]
-        )
+        browser = p.chromium.launch(headless=True)
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            viewport={'width': 1440, 'height': 900},
-            locale="th-TH"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         page = context.new_page()
-
-        # 1. ดึงประเภทนักลงทุน SET
-        print("กำลังดึงประเภทนักลงทุน SET...")
-        try:
-            page.goto("https://www.settrade.com/th/equities/market-data/investor-type", wait_until="domcontentloaded", timeout=15000)
-            page.wait_for_timeout(2000)
-
-            set_res = page.evaluate("""async () => {
-                try {
-                    const res = await fetch('https://api.settrade.com/api/set/market/investor-type');
-                    return await res.json();
-                } catch(e) { return null; }
-            }""")
-
-            if set_res:
-                items = set_res if isinstance(set_res, list) else set_res.get("investorTypes", set_res.get("data", []))
-                if isinstance(items, list):
-                    for item in items:
-                        name = str(item.get("investorTypeName", item.get("name", "")))
-                        net_val = item.get("netValue", item.get("net", "-"))
-                        if isinstance(net_val, (int, float)):
-                            net_val = f"{net_val:+,.2f}"
-
-                        if "สถาบัน" in name: set_data["นักลงทุนสถาบัน"] = net_val
-                        elif "บริษัทหลักทรัพย์" in name or "บล." in name: set_data["บัญชีบริษัทหลักทรัพย์"] = net_val
-                        elif "ต่างชาติ" in name or "ต่างประเทศ" in name: set_data["นักลงทุนต่างชาติ"] = net_val
-                        elif "ในประเทศ" in name or "ทั่วไป" in name: set_data["นักลงทุนภายในประเทศ"] = net_val
-        except Exception as e:
-            print(f"Error SET Investor: {e}")
-
-        # 2. ดึงประเภทนักลงทุน TFEX
-        print("กำลังดึงประเภทนักลงทุน TFEX...")
-        try:
-            page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="domcontentloaded", timeout=15000)
-            page.wait_for_timeout(2000)
-
-            tfex_res = page.evaluate("""async () => {
-                try {
-                    const res = await fetch('https://api.settrade.com/api/tfex/market/investor-type');
-                    return await res.json();
-                } catch(e) { return null; }
-            }""")
-
-            if tfex_res:
-                items = tfex_res if isinstance(tfex_res, list) else tfex_res.get("investorTypes", tfex_res.get("data", []))
-                if isinstance(items, list):
-                    for item in items:
-                        cat = item.get("categoryName", item.get("productGroup", item.get("product", "")))
-                        inst = item.get("institutionNet", item.get("instNet", "-"))
-                        foreign = item.get("foreignNet", item.get("foreignNetValue", "-"))
-                        retail = item.get("retailNet", item.get("localNet", "-"))
-
-                        tfex_data["นักลงทุนสถาบัน"][cat] = f"{inst:+,.0f}" if isinstance(inst, (int, float)) else str(inst)
-                        tfex_data["นักลงทุนต่างชาติ"][cat] = f"{foreign:+,.0f}" if isinstance(foreign, (int, float)) else str(foreign)
-                        tfex_data["นักลงทุนภายในประเทศ"][cat] = f"{retail:+,.0f}" if isinstance(retail, (int, float)) else str(retail)
-        except Exception as e:
-            print(f"Error TFEX Investor: {e}")
-
-        # 3. ดึงข้อมูลสัญญา SET50 Futures รายตัวผ่าน API Direct Context
-        symbols = get_active_s50_symbols()
-        print(f"กำลังดึงข้อมูลสัญญา SET50: {symbols}")
-
+        
+        symbols = get_all_s50_symbols(page)
+        if not symbols:
+            browser.close()
+            return None, 0, 0
+            
+        results = []
+        total_vol = 0
+        total_oi = 0
+        
         for sym in symbols:
-            try:
-                data = page.evaluate(f"""async () => {{
-                    try {{
-                        const res = await fetch('https://api.settrade.com/api/tfex/quote/{sym}/overview');
-                        return await res.json();
-                    }} catch(e) {{ return null; }}
-                }}""")
-
-                if data:
-                    last = data.get("last", data.get("lastPrice", "-"))
-                    open_p = data.get("open", data.get("openPrice", "-"))
-                    high = data.get("high", data.get("highPrice", "-"))
-                    low = data.get("low", data.get("lowPrice", "-"))
-                    avg = data.get("averagePrice", data.get("avgPrice", "-"))
-                    vol = data.get("totalVolume", data.get("volume", 0))
-                    oi = data.get("openInterest", data.get("oi", 0))
-
-                    v_num = int(vol) if isinstance(vol, (int, float)) else 0
-                    o_num = int(oi) if isinstance(oi, (int, float)) else 0
-                    rem = calculate_remaining_days(sym)
-
-                    results.append({
-                        "symbol": sym,
-                        "remaining_days": rem,
-                        "last": f"{last:,.2f}" if isinstance(last, (int, float)) else str(last),
-                        "open": f"{open_p:,.2f}" if isinstance(open_p, (int, float)) else str(open_p),
-                        "high": f"{high:,.2f}" if isinstance(high, (int, float)) else str(high),
-                        "low": f"{low:,.2f}" if isinstance(low, (int, float)) else str(low),
-                        "avg": f"{avg:,.2f}" if isinstance(avg, (int, float)) else str(avg),
-                        "vol": f"{v_num:,}",
-                        "oi": f"{o_num:,}",
-                        "vol_num": v_num,
-                        "oi_num": o_num
-                    })
-                    total_vol += v_num
-                    total_oi += o_num
-                    print(f"  + {sym}: Last={last}, Vol={v_num}, OI={o_num}")
-            except Exception as e:
-                print(f"  - Error {sym}: {e}")
-
+            data = get_symbol_overview_data(page, sym)
+            if data:
+                results.append(data)
+                total_vol += data["vol_num"]
+                total_oi += data["oi_num"]
+                
         browser.close()
+        return results, total_vol, total_oi
 
-    return results, total_vol, total_oi, set_data, tfex_data
-
-def format_investor_summary(set_data, tfex_data):
-    groups = [
-        ("🌐 **นักลงทุนต่างชาติ**", "นักลงทุนต่างชาติ"),
-        ("🏦 **นักลงทุนสถาบัน**", "นักลงทุนสถาบัน"),
-        ("💼 **บัญชีบริษัทหลักทรัพย์**", "บัญชีบริษัทหลักทรัพย์"),
-        ("👤 **นักลงทุนภายในประเทศ**", "นักลงทุนภายในประเทศ")
-    ]
-    output = []
-    for title, group_key in groups:
-        lines = [title]
-        set_net = set_data.get(group_key, "-")
-        lines.append(f"• Equity Index: {set_net}")
-        tfex_group = tfex_data.get(group_key, {})
-        for cat in ["Equity Index Futures", "Single Stock Futures", "Currency Futures", "Equity Index Call Options", "Equity Index Put Options"]:
-            val = tfex_group.get(cat, "-")
-            lines.append(f"• {cat}: {val}")
-        output.append("\n".join(lines))
-    return "\n\n".join(output)
-
-def format_line_message(results, total_vol, total_oi, set_data, tfex_data):
-    investor_summary = format_investor_summary(set_data, tfex_data)
+def format_line_message(results, total_vol, total_oi):
+    """4. จัดเรียงลำดับตาม OI (มากไปน้อย) และจัดข้อความแสดงเฉพาะวันคงเหลือ"""
     results_sorted = sorted(results, key=lambda x: x["oi_num"], reverse=True)
+    
     lines = []
     for item in results_sorted:
         lines.append(
             f"📌 **[{item['symbol']}]**\n"
             f"• วันคงเหลือ: {item['remaining_days']}\n"
-            f"• ราคาล่าสุด: {item['last']}\n"
+            f"• ราคาล่าสุด: {item['last']} {item['change_pct']}\n"
             f"• ราคาเปิด: {item['open']}\n"
             f"• ราคาสูงสุด: {item['high']}\n"
             f"• ราคาต่ำสุด: {item['low']}\n"
@@ -228,23 +173,43 @@ def format_line_message(results, total_vol, total_oi, set_data, tfex_data):
             f"• ปริมาณ (สัญญา): {item['vol']}\n"
             f"• สถานะคงค้าง (OI): {item['oi']}"
         )
-    
-    s50_summary = "\n\n".join(lines) if lines else "ไม่พบข้อมูลสัญญาล่าสุด"
-    s50_summary += f"\n\n📊 **สรุปรวม SET50 Futures ทั้งหมด**\n• ปริมาณการซื้อขายรวม: {total_vol:,} สัญญา\n• สถานะคงค้างรวม (OI): {total_oi:,} สัญญา"
-    
-    return f"👥 **สรุปมูลค่าการซื้อขายตามประเภทนักลงทุน**\n\n{investor_summary}\n\n====================\n\n📈 **สรุป SET50 Futures วันนี้ (เรียงตาม OI สูงสุด):**\n\n{s50_summary}"
+        
+    summary_text = "\n\n".join(lines)
+    summary_text += f"\n\n📊 **สรุปรวม SET50 Futures ทั้งหมด**\n• ปริมาณการซื้อขายรวม: {total_vol:,} สัญญา\n• สถานะคงค้างรวม (OI): {total_oi:,} สัญญา"
+    return summary_text
 
 def send_line_message(message):
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
     user_id = os.environ.get("LINE_USER_ID")
+    
     url = "https://api.line.me/v2/bot/message/push"
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
-    payload = {"to": user_id, "messages": [{"type": "text", "text": message}]}
-    res = requests.post(url, headers=headers, json=payload)
-    print(f"--- LINE API RESULT --- Code: {res.status_code}")
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}"
+    }
+    payload = {
+        "to": user_id,
+        "messages": [
+            {
+                "type": "text",
+                "text": f"📊 สรุป SET50 Futures วันนี้ (เรียงตาม OI สูงสุด):\n\n{message}"
+            }
+        ]
+    }
+    response = requests.post(url, headers=headers, json=payload)
+    print(f"--- LINE API RESULT ---")
+    print(f"Status Code: {response.status_code}")
+    print(f"Response Text: {response.text}")
+    print(f"----------------------")
 
 if __name__ == "__main__":
-    results, total_vol, total_oi, set_data, tfex_data = fetch_all_data()
-    msg = format_line_message(results, total_vol, total_oi, set_data, tfex_data)
-    send_line_message(msg)
-    print("ทำงานเสร็จสิ้น!")
+    try:
+        results, total_vol, total_oi = fetch_all_data()
+        if results:
+            message = format_line_message(results, total_vol, total_oi)
+            send_line_message(message)
+            print("ส่งข้อมูลเข้า LINE สำเร็จเรียบร้อย!")
+        else:
+            print("ไม่สามารถดึงข้อมูลได้")
+    except Exception as e:
+        print(f"เกิดข้อผิดพลาดในการทำงาน: {e}")
