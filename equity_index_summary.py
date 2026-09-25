@@ -12,51 +12,56 @@ def format_number_with_sign(val_str):
     try:
         num = float(clean_val)
         if num > 0:
-            return f"+{num:,.2f}" if "." in clean_val else f"+{int(num):,}"
+            return f"+{num:,.2f}"
         else:
-            return f"{num:,.2f}" if "." in clean_val else f"{int(num):,}"
+            return f"{num:,.2f}"
     except ValueError:
         return val_str
 
 def fetch_equity_index_data(page):
-    """ดึงข้อมูลประเภทนักลงทุนเฉพาะ Equity Index (SET)"""
+    """ดึงข้อมูลมูลค่าการซื้อขายตามกลุ่มนักลงทุนตลาดหุ้น (SET)"""
     equity_data = {}
 
-    print("กำลังดึงข้อมูล Equity Index...")
+    print("กำลังดึงข้อมูลมูลค่าการซื้อขายตลาดหุ้น (SET)...")
     try:
-        page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="domcontentloaded", timeout=30000)
-        page.evaluate("window.scrollBy(0, 300)")
-        time.sleep(5)
+        # ไปที่หน้าสรุปมูลค่าการซื้อขายตามกลุ่มนักลงทุน SET โดยตรง
+        page.goto("https://www.settrade.com/th/equities/market-data/investor-type", wait_until="networkidle", timeout=30000)
+        time.sleep(3)
         
+        # ดึงแถวในตารางหลัก
         rows = page.locator("table tbody tr").all()
         for r in rows:
             text = r.text_content().strip()
             cleaned_text = " ".join(text.split())
             
-            if "Equity Index" in cleaned_text and "Futures" not in cleaned_text:
-                nums = re.findall(r'[-+]?\d{1,3}(?:,\d{3})*(?:\.\d+)?|-', cleaned_text)
-                if len(nums) >= 4:
-                    equity_data["สถาบัน"] = format_number_with_sign(nums[0])
-                    equity_data["บัญชี บล."] = format_number_with_sign(nums[1])
-                    equity_data["ต่างชาติ"] = format_number_with_sign(nums[2])
-                    equity_data["ในประเทศ"] = format_number_with_sign(nums[3])
-                elif len(nums) == 3:
-                    equity_data["สถาบัน"] = format_number_with_sign(nums[0])
-                    equity_data["ต่างชาติ"] = format_number_with_sign(nums[1])
-                    equity_data["ในประเทศ"] = format_number_with_sign(nums[2])
+            mapping = {
+                "สถาบันในประเทศ": "สถาบัน",
+                "บัญชีบริษัทหลักทรัพย์": "บัญชี บล.",
+                "นักลงทุนต่างประเทศ": "ต่างชาติ",
+                "นักลงทุนทั่วไปในประเทศ": "ในประเทศ"
+            }
+            
+            for key_th, key_name in mapping.items():
+                if key_th in cleaned_text:
+                    # ดึงตัวเลขทั้งหมดในแถว (คอลัมน์สุทธิอยู่ตำแหน่งสุดท้าย)
+                    nums = re.findall(r'[-+]?\d{1,3}(?:,\d{3})*(?:\.\d+)?|-', cleaned_text)
+                    if nums:
+                        net_val = nums[-1]  # ยอดสุทธิ (ล้านบาท)
+                        equity_data[key_name] = format_number_with_sign(net_val)
+
     except Exception as e:
         print(f"Error Equity Index: {e}")
 
     return equity_data
 
 def format_equity_message(equity_data):
-    """จัดรูปแบบข้อความสรุป Equity Index"""
+    """จัดรูปแบบข้อความสรุป SET"""
     msg = (
-        "📊 **สรุปมูลค่าการซื้อขาย Equity Index**\n\n"
-        f"🌐 **นักลงทุนต่างชาติ**: {equity_data.get('ต่างชาติ', '-')}\n"
-        f"🏦 **นักลงทุนสถาบัน**: {equity_data.get('สถาบัน', '-')}\n"
-        f"👤 **นักลงทุนภายในประเทศ**: {equity_data.get('ในประเทศ', '-')}\n"
-        f"💼 **บัญชีบริษัทหลักทรัพย์**: {equity_data.get('บัญชี บล.', '-')}"
+        "📊 **สรุปมูลค่าการซื้อขายตามกลุ่มนักลงทุน (SET)**\n\n"
+        f"🌐 **นักลงทุนต่างชาติ**: {equity_data.get('ต่างชาติ', '-')} ลบ.\n"
+        f"🏦 **นักลงทุนสถาบัน**: {equity_data.get('สถาบัน', '-')} ลบ.\n"
+        f"👤 **นักลงทุนภายในประเทศ**: {equity_data.get('ในประเทศ', '-')} ลบ.\n"
+        f"💼 **บัญชีบริษัทหลักทรัพย์**: {equity_data.get('บัญชี บล.', '-')} ลบ."
     )
     return msg
 
@@ -89,4 +94,4 @@ if __name__ == "__main__":
         browser.close()
 
         send_line_message(msg)
-        print("ส่งสรุป Equity Index เข้า LINE สำเร็จ!")
+        print("ส่งสรุป SET เข้า LINE สำเร็จ!")
