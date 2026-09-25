@@ -1,9 +1,11 @@
-name: Run Daily Trading Summary Bots
+name: Run Investor Bots
 
 on:
+  workflow_dispatch: # ปุ่มสำหรับกดรันด้วยตนเอง (Manual)
   schedule:
-    - cron: '0 10 * * 1-5'
-  workflow_dispatch:
+    # 12:00 UTC = 19:00 น. เวลาไทย (UTC+7)
+    # 1-5 = วันจันทร์ ถึง วันศุกร์
+    - cron: '0 12 * * 1-5'
 
 jobs:
   run-bots:
@@ -22,23 +24,25 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install requests playwright
-          playwright install chromium
-          playwright install-deps chromium
+          playwright install --with-deps chromium
 
       - name: Run SET50 Futures Bot (main.py)
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
-        run: python main.py
+        run: |
+          python main.py
 
       - name: Run Equity Index Bot (equity_index_summary.py)
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
-        run: python equity_index_summary.py
+        run: |
+          python equity_index_summary.py
 
       - name: Run Investor Type Bot (investor_type_summary.py)
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
-        run: python investor_type_summary.py
+        run: |
+          python investor_type_summary.py
