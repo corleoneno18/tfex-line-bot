@@ -6,7 +6,7 @@ from google import genai
 from playwright.sync_api import sync_playwright
 
 def get_tfex_data_via_playwright():
-    """เปิดหน้าเว็บ Settrade ผ่าน Headless Browser โดยรอเฉพาะ Element ตาราง"""
+    """เปิดหน้าเว็บ Settrade ผ่าน Playwright เพื่อดึงทั้ง innerText และ HTML"""
     url = "https://www.settrade.com/th/derivatives/market-data/trading-quotation-by-series"
     print("กำลังเปิดเบราว์เซอร์เพื่อดึงข้อมูลตาราง TFEX...")
     
@@ -18,63 +18,51 @@ def get_tfex_data_via_playwright():
         page = context.new_page()
         
         try:
-            # เปลี่ยนการรอเป็น domcontentloaded และขยาย Timeout เป็น 60 วินาที
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            
-            # รอให้มีตารางราคาโผล่ขึ้นมาบนหน้าเว็บ
             print("กำลังรอโหลดตารางราคา...")
             page.wait_for_selector("table", timeout=30000)
-            time.sleep(5)  # รอให้ข้อมูลตัวเลขในตาราง Render ครบถ้วน
+            time.sleep(5)  # รอให้ข้อมูลตัวเลข Render ครบ
             
-            content = page.locator("body").inner_text()
+            # ดึงข้อความและ HTML
+            text_content = page.locator("body").inner_text()
+            html_content = page.content()
             browser.close()
             print("ดึงข้อมูลจากหน้าเว็บสำเร็จ!")
-            return content
+            return text_content, html_content
         except Exception as e:
             print(f"เกิดข้อผิดพลาดในการดึงหน้าเว็บ: {e}")
             browser.close()
-            return None
+            return None, None
 
-def fallback_parse_text(raw_text):
-    """ฟังก์ชันสกัดข้อมูลด้วย Regex กรณี Gemini API ไม่พร้อมใช้งาน"""
-    print("สลับมาใช้ระบบ Direct Regex Extractor...")
-    pattern = r'(S50[A-Z0-9]+)\s+([\d\.\-]+)\s+([\d\.\-]+)\s+([\d\.\-]+%?)\s+([\d\.\-]+)\s+([\d\.\-]+)\s+([\d\.\-]+)\s+([\d\.\-]+)\s+([\d,]+)\s+([\d,]+)'
-    matches = re.findall(pattern, raw_text)
+def fallback_parse_content(text_content, html_content):
+    """ฟังก์ชันสกัดข้อมูลสำรอง กรณี Gemini API ไม่พร้อมใช้งาน"""
+    print("สลับมาใช้ระบบ Fallback Extractor...")
     
-    if not matches:
-        return "ไม่สามารถประมวลผลรูปแบบตารางได้ในขณะนี้"
-        
-    lines = []
-    total_vol = 0
-    total_oi = 0
+    # 1. ลองใช้ Regex แบบยืดหยุ่นหาจาก Text Content
+    symbols = re.findall(r'S50[A-Z0-9]+', text_content)
+    unique_symbols = list(dict.fromkeys(symbols))  # กรองตัวซ้ำ
     
-    for m in matches:
-        symbol, last, chg, pct, open_p, high, low, avg_p, vol, oi = m
-        vol_num = int(vol.replace(',', '')) if vol.replace(',', '').isdigit() else 0
-        oi_num = int(oi.replace(',', '')) if oi.replace(',', '').isdigit() else 0
-        total_vol += vol_num
-        total_oi += oi_num
+    if unique_symbols:
+        lines = []
+        for sym in unique_symbols:
+            # ค้นหาบรรทัดที่มีชื่อสัญลักษณ์
+            pattern = re.escape(sym) + r'[\s\S]{1,100}'
+            match = re.search(pattern, text_content)
+            if match:
+                snippet = match.group(0).replace('\n', ' ')
+                lines.append(f"📌 [{sym}]\n• ข้อมูล: {snippet[:80]}...")
         
-        lines.append(
-            f"📌 [{symbol}]\n"
-            f"• ราคาล่าสุด: {last}\n"
-            f"• เปลี่ยนแปลง: {chg} ({pct})\n"
-            f"• สูงสุด / ต่ำสุด: {high} / {low}\n"
-            f"• ราคาเปิด / เฉลี่ย: {open_p} / {avg_p}\n"
-            f"• ปริมาณ (สัญญา): {vol}\n"
-            f"• สถานะคงค้าง (OI): {oi}\n"
-        )
-        
-    summary_text = "\n".join(lines)
-    summary_text += f"\n📊 **รวม SET50 Futures**\n• ปริมาณรวม: {total_vol:,} สัญญา\n• สถานะคงค้างรวม: {total_oi:,} สัญญา"
-    return summary_text
+        if lines:
+            return "\n\n".join(lines)
+
+    return "ระบบไม่สามารถดึงข้อมูลตารางได้ กรุณาตรวจสอบหน้าเว็บ Settrade อีกครั้ง"
 
 def summarize_with_gemini(raw_text):
     api_key = os.environ.get("GEMINI_API_KEY")
     client = genai.Client(api_key=api_key)
     
     prompt = f"""
-    จากข้อความหน้าเว็บ Settrade TFEX ด้านล่างนี้ ให้สกัดข้อมูลตารางราคาของ SET50 Futures ทุก Series ทั้งหมดที่มี (เช่น S50U26, S50Z26 ฯลฯ)
+    จากข้อความหน้าเว็บ Settrade TFEX ด้านล่างนี้ ให้สกัดข้อมูลตารางราคาของ SET50 Futures ทุก Series ทั้งหมดที่มี (เช่น S50U26, S50Z26, S50H27 ฯลฯ)
     แล้วจัดรูปแบบสรุปเป็นข้อความอ่านง่ายสำหรับส่งเข้า LINE ดังนี้:
 
     📌 [ชื่อย่อสัญญา]
@@ -88,10 +76,10 @@ def summarize_with_gemini(raw_text):
     พร้อมสรุปผลรวม ปริมาณสัญญา และ สถานะคงค้าง ทั้งหมดท้ายข้อความด้วย
 
     ข้อมูลจากหน้าเว็บ:
-    {raw_text[:12000]}
+    {raw_text[:15000]}
     """
     
-    max_retries = 3
+    max_retries = 5
     for attempt in range(max_retries):
         try:
             print(f"กำลังเรียก Gemini API ครั้งที่ {attempt + 1}...")
@@ -99,20 +87,21 @@ def summarize_with_gemini(raw_text):
                 model="gemini-3.8-flash",
                 contents=prompt
             )
-            print("Gemini ประมวลผลสำเร็จ!")
-            return response.text
+            if response.text and "📌" in response.text:
+                print("Gemini ประมวลผลสำเร็จ!")
+                return response.text
+            elif response.text:
+                print("Gemini ตอบกลับแต่รูปแบบไม่สมบูรณ์ กำลังลองใหม่...")
         except Exception as e:
             err_msg = str(e)
-            if "503" in err_msg or "UNAVAILABLE" in err_msg:
-                wait_time = (attempt + 1) * 5
-                print(f"เซิร์ฟเวอร์หนาแน่น (503) รอ {wait_time} วินาที...")
-                time.sleep(wait_time)
-            else:
-                print(f"เกิดข้อผิดพลาดกับ Gemini: {err_msg}")
-                break
+            print(f"ข้อผิดพลาดจาก Gemini: {err_msg}")
+            
+        wait_time = (attempt + 1) * 3
+        print(f"รอ {wait_time} วินาที ก่อนลองใหม่...")
+        time.sleep(wait_time)
                 
     print("Gemini API ไม่พร้อมใช้งาน สลับไปใช้ Fallback Extractor...")
-    return fallback_parse_text(raw_text)
+    return None
 
 def send_line_message(message):
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
@@ -140,9 +129,12 @@ def send_line_message(message):
 
 if __name__ == "__main__":
     try:
-        raw_content = get_tfex_data_via_playwright()
-        if raw_content:
-            summary = summarize_with_gemini(raw_content)
+        text_content, html_content = get_tfex_data_via_playwright()
+        if text_content:
+            summary = summarize_with_gemini(text_content)
+            if not summary:
+                summary = fallback_parse_content(text_content, html_content)
+            
             send_line_message(summary)
             print("ทำงานสำเร็จ!")
         else:
