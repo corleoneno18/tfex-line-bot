@@ -2,9 +2,8 @@ name: Run Daily Trading Summary Bots
 
 on:
   schedule:
-    # ตั้งเวลาให้รันอัตโนมัติ (ตัวอย่าง: ทุกวันจันทร์ - ศุกร์ เวลา 17:00 น. เวลาไทย = 10:00 UTC)
     - cron: '0 10 * * 1-5'
-  workflow_dispatch: # ปุ่มกดรันเองผ่านหน้าเว็บ GitHub Actions
+  workflow_dispatch:
 
 jobs:
   run-bots:
@@ -32,8 +31,14 @@ jobs:
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
         run: python main.py
 
-      - name: Run Investor Type Bot (investor_type.py)
+      - name: Run Equity Index Bot (equity_index_summary.py)
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
-        run: python investor_type.py
+        run: python equity_index_summary.py
+
+      - name: Run Investor Type Bot (investor_type_summary.py)
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+        run: python investor_type_summary.py
