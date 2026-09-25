@@ -36,15 +36,43 @@ def fetch_equity_index_data():
                 page.click("button:has-text('ยอมรับ')", timeout=3000)
             except Exception:
                 pass
+
+            # ตรวจสอบว่าเลือก Tab 'SET' อยู่
+            try:
+                set_tab = page.locator("button:has-text('SET'), a:has-text('SET')").first
+                if set_tab.is_visible():
+                    set_tab.click()
+                    time.sleep(2)
+            except Exception:
+                pass
+
+            # หาตำแหน่งคอลัมน์ "สุทธิ" ของกลุ่ม "รายวัน"
+            target_col_index = -1
+            header_rows = page.locator("table thead tr").all()
             
-            # ดึงแถวทั้งหมดในตาราง
+            if len(header_rows) >= 2:
+                # แถวล่างสุดของ Header จะมีคำว่า "สุทธิ" ซ้ำกันหลายช่วง (รายวัน, รายเดือน, ต้นปี)
+                bottom_headers = header_rows[-1].locator("th, td").all()
+                net_count = 0
+                for idx, h in enumerate(bottom_headers):
+                    text = h.text_content().strip()
+                    if "สุทธิ" in text:
+                        net_count += 1
+                        if net_count == 1: # สุทธิอันแรก = สุทธิรายวัน
+                            target_col_index = idx
+                            break
+
+            # หากระหา Index ไม่เจอ ให้ใช้ Default index สำรอง
+            if target_col_index == -1:
+                target_col_index = 4
+
+            # ดึงข้อมูลจาก Body ตาม Index ที่ระบุ
             rows = page.locator("table tbody tr").all()
             for r in rows:
                 tds = r.locator("td").all()
-                if len(tds) >= 5:
+                if len(tds) > target_col_index:
                     investor_type = tds[0].text_content().strip()
-                    # คอลัมน์Index 4 คือช่อง "สุทธิ" ของช่วงรายวัน
-                    daily_net_val = tds[4].text_content().strip()
+                    daily_net_val = tds[target_col_index].text_content().strip()
                     formatted_val = format_number_with_sign(daily_net_val)
                     
                     if "สถาบัน" in investor_type:
