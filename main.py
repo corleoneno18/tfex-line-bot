@@ -10,7 +10,7 @@ def get_tfex_data():
     soup = BeautifulSoup(response.text, "html.parser")
     
     text_content = soup.get_text(separator=' ', strip=True)
-    return text_content[:10000]
+    return text_content[:15000]
 
 def summarize_with_gemini(raw_data):
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -26,7 +26,7 @@ def summarize_with_gemini(raw_data):
     """
     
     response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        model="gemini-3.8-flash",
         contents=prompt
     )
     return response.text
@@ -50,12 +50,16 @@ def send_line_message(message):
         ]
     }
     response = requests.post(url, headers=headers, json=payload)
-    print(f"LINE Response status: {response.status_code}")
+    print(f"--- LINE API RESULT ---")
+    print(f"Status Code: {response.status_code}")
+    print(f"Response Text: {response.text}")
+    print(f"----------------------")
 
 if __name__ == "__main__":
     try:
         raw = get_tfex_data()
         summary = summarize_with_gemini(raw)
+        print("Gemini Summary Success!")
         send_line_message(summary)
         print("ทำงานสำเร็จ!")
     except Exception as e:
