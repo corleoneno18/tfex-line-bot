@@ -4,6 +4,21 @@ import time
 import requests
 from playwright.sync_api import sync_playwright
 
+def format_number_with_sign(val_str):
+    """แปลงตัวเลขให้มีเครื่องหมาย + นำหน้าหากเป็นค่าบวก"""
+    if not val_str or val_str == "-":
+        return "-"
+    # ตัดเครื่องหมาย + เดิมออกก่อนเพื่อนำมาวิเคราะห์
+    clean_val = val_str.replace("+", "").replace(",", "").strip()
+    try:
+        num = int(clean_val)
+        if num > 0:
+            return f"+{num:,}"
+        else:
+            return f"{num:,}"
+    except ValueError:
+        return val_str
+
 def fetch_investor_type_data(page):
     """ดึงข้อมูลประเภทนักลงทุน TFEX จากตารางบนเว็บ Settrade"""
     tfex_data = {
@@ -16,15 +31,13 @@ def fetch_investor_type_data(page):
     try:
         page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="domcontentloaded", timeout=30000)
         
-        # เลื่อนหน้าจอลงมาเล็กน้อยเพื่อให้คอมโพเนนต์เริ่มโหลด
+        # เลื่อนหน้าจอลงมาเพื่อให้คอมโพเนนต์เริ่มโหลด
         page.evaluate("window.scrollBy(0, 300)")
-        time.sleep(5) # รอให้ตารางเรนเดอร์ข้อมูลเสร็จ
+        time.sleep(5)
         
-        # ดึงบรรทัดตารางทั้งหมด
         rows = page.locator("table tbody tr").all()
         for r in rows:
             text = r.text_content().strip()
-            # ทำความสะอาดข้อความและตัดช่องว่างซ้ำ
             cleaned_text = " ".join(text.split())
             
             categories = [
@@ -37,12 +50,12 @@ def fetch_investor_type_data(page):
             
             for cat in categories:
                 if cat in cleaned_text:
-                    # ดึงตัวเลขทั้งหมดรวมเครื่องหมาย +/- เช่น +28,716 หรือ -372
                     nums = re.findall(r'[-+]?\d{1,3}(?:,\d{3})*', cleaned_text)
                     if len(nums) >= 3:
-                        tfex_data["นักลงทุนสถาบัน"][cat] = nums[0]
-                        tfex_data["นักลงทุนต่างชาติ"][cat] = nums[1]
-                        tfex_data["นักลงทุนภายในประเทศ"][cat] = nums[2]
+                        # ใส่ฟังก์ชันจัดรูปแบบเครื่องหมาย + / - ให้ครบทุกกลุ่ม
+                        tfex_data["นักลงทุนสถาบัน"][cat] = format_number_with_sign(nums[0])
+                        tfex_data["นักลงทุนต่างชาติ"][cat] = format_number_with_sign(nums[1])
+                        tfex_data["นักลงทุนภายในประเทศ"][cat] = format_number_with_sign(nums[2])
 
     except Exception as e:
         print(f"Error TFEX Investor Type: {e}")
