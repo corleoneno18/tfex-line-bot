@@ -2,7 +2,8 @@ name: Daily SET50 Futures Report
 
 on:
   schedule:
-    - cron: '0 12 * * 1-5' # 19:00 ICT (Mon-Fri)
+    # รันเวลา 17:00 น. เวลาไทย (10:00 UTC) ทุกวันจันทร์ - ศุกร์
+    - cron: '0 10 * * 1-5'
   workflow_dispatch:
 
 jobs:
@@ -15,12 +16,12 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.10'
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 google-genai
+          pip install -r requirements.txt
+          playwright install chromium
 
       - name: Run script
         env:
