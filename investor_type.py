@@ -5,7 +5,7 @@ import requests
 from playwright.sync_api import sync_playwright
 
 def fetch_investor_type_data(page):
-    """ดึงข้อมูลสรุปประเภทนักลงทุนเฉพาะ TFEX"""
+    """ดึงข้อมูลสรุปประเภทนักลงทุน TFEX โดยใช้การค้นหาข้อความจากทั้งหน้าเว็บ"""
     tfex_data = {
         "นักลงทุนสถาบัน": {},
         "นักลงทุนต่างชาติ": {},
@@ -14,18 +14,32 @@ def fetch_investor_type_data(page):
 
     print("กำลังดึงข้อมูลประเภทนักลงทุน TFEX...")
     try:
-        page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="domcontentloaded", timeout=30000)
-        time.sleep(3)
+        page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="networkidle", timeout=45000)
+        time.sleep(5)  # รอให้ JavaScript โหลดข้อมูลลงตารางเสร็จสิ้น
         
-        rows = page.locator("table tbody tr").all()
-        for r in rows:
-            cells = [c.text_content().strip() for c in r.locator("td, th").all()]
-            if len(cells) >= 4:
-                cat_name = cells[0]
-                if any(k in cat_name for k in ["Futures", "Options", "Equity"]):
-                    tfex_data["นักลงทุนสถาบัน"][cat_name] = cells[1]
-                    tfex_data["นักลงทุนต่างชาติ"][cat_name] = cells[2]
-                    tfex_data["นักลงทุนภายในประเทศ"][cat_name] = cells[3]
+        # ดึงข้อความทั้งหมดในหน้ามาวิเคราะห์
+        text_content = page.locator("body").inner_text()
+        
+        categories = [
+            "Equity Index Futures",
+            "Single Stock Futures",
+            "Currency Futures",
+            "Equity Index Call Options",
+            "Equity Index Put Options"
+        ]
+
+        # อ่านข้อมูลแยกตามบรรทัดที่มีชื่อสินค้า
+        lines = text_content.split('\n')
+        for line in lines:
+            for cat in categories:
+                if cat in line:
+                    # ค้นหาตัวเลขที่มีเครื่องหมาย +/- หรือตัวเลขปกติ เช่น +28,716 หรือ -372
+                    nums = re.findall(r'[-+]?\d{1,3}(?:,\d{3})*', line)
+                    if len(nums) >= 3:
+                        tfex_data["นักลงทุนสถาบัน"][cat] = nums[0]
+                        tfex_data["นักลงทุนต่างชาติ"][cat] = nums[1]
+                        tfex_data["นักลงทุนภายในประเทศ"][cat] = nums[2]
+
     except Exception as e:
         print(f"Error TFEX Investor Type: {e}")
 
