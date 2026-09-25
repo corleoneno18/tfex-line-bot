@@ -5,40 +5,13 @@ import requests
 from playwright.sync_api import sync_playwright
 
 def fetch_investor_type_data(page):
-    """ดึงข้อมูลสรุปประเภทนักลงทุนทั้งตลาด SET (หุ้น) และ TFEX"""
-    set_data = {
-        "นักลงทุนสถาบัน": "-",
-        "บัญชีบริษัทหลักทรัพย์": "-",
-        "นักลงทุนต่างชาติ": "-",
-        "นักลงทุนภายในประเทศ": "-"
-    }
+    """ดึงข้อมูลสรุปประเภทนักลงทุนเฉพาะ TFEX"""
     tfex_data = {
         "นักลงทุนสถาบัน": {},
         "นักลงทุนต่างชาติ": {},
-        "บัญชีบริษัทหลักทรัพย์": {},
         "นักลงทุนภายในประเทศ": {}
     }
 
-    # 1. ดึงข้อมูลตลาด SET (หุ้น)
-    print("กำลังดึงข้อมูลประเภทนักลงทุน SET...")
-    try:
-        page.goto("https://www.settrade.com/th/equities/market-data/investor-type", wait_until="domcontentloaded", timeout=30000)
-        time.sleep(3)
-        
-        rows = page.locator("table tbody tr").all()
-        for r in rows:
-            txt = r.inner_text()
-            nums = re.findall(r'[-+]?\d{1,3}(?:,\d{3})*(?:\.\d+)?', txt)
-            if nums:
-                net_val = nums[-1] # ค่า Net อยู่ท้ายแถว
-                if "สถาบัน" in txt: set_data["นักลงทุนสถาบัน"] = net_val
-                elif "บริษัทหลักทรัพย์" in txt or "บล." in txt: set_data["บัญชีบริษัทหลักทรัพย์"] = net_val
-                elif "ต่างชาติ" in txt or "ต่างประเทศ" in txt: set_data["นักลงทุนต่างชาติ"] = net_val
-                elif "ในประเทศ" in txt or "ทั่วไป" in txt: set_data["นักลงทุนภายในประเทศ"] = net_val
-    except Exception as e:
-        print(f"Error SET Investor Type: {e}")
-
-    # 2. ดึงข้อมูลตลาด TFEX
     print("กำลังดึงข้อมูลประเภทนักลงทุน TFEX...")
     try:
         page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="domcontentloaded", timeout=30000)
@@ -56,23 +29,29 @@ def fetch_investor_type_data(page):
     except Exception as e:
         print(f"Error TFEX Investor Type: {e}")
 
-    return set_data, tfex_data
+    return tfex_data
 
-def format_investor_message(set_data, tfex_data):
-    """จัดรูปแบบข้อความที่จะส่งเข้า LINE"""
+def format_investor_message(tfex_data):
+    """จัดรูปแบบข้อความ แสดงเฉพาะ ต่างชาติ, สถาบัน, และในประเทศ"""
     groups = [
         ("🌐 **นักลงทุนต่างชาติ**", "นักลงทุนต่างชาติ"),
         ("🏦 **นักลงทุนสถาบัน**", "นักลงทุนสถาบัน"),
-        ("💼 **บัญชีบริษัทหลักทรัพย์**", "บัญชีบริษัทหลักทรัพย์"),
         ("👤 **นักลงทุนภายในประเทศ**", "นักลงทุนภายในประเทศ")
     ]
+    
+    categories = [
+        "Equity Index Futures",
+        "Single Stock Futures",
+        "Currency Futures",
+        "Equity Index Call Options",
+        "Equity Index Put Options"
+    ]
+    
     investor_lines = []
     for title, group_key in groups:
         lines = [title]
-        set_net = set_data.get(group_key, "-")
-        lines.append(f"• Equity Index: {set_net}")
         tfex_group = tfex_data.get(group_key, {})
-        for cat in ["Equity Index Futures", "Single Stock Futures", "Currency Futures", "Equity Index Call Options", "Equity Index Put Options"]:
+        for cat in categories:
             val = tfex_group.get(cat, "-")
             lines.append(f"• {cat}: {val}")
         investor_lines.append("\n".join(lines))
@@ -103,8 +82,8 @@ if __name__ == "__main__":
         )
         page = context.new_page()
 
-        set_data, tfex_data = fetch_investor_type_data(page)
-        msg = format_investor_message(set_data, tfex_data)
+        tfex_data = fetch_investor_type_data(page)
+        msg = format_investor_message(tfex_data)
         
         browser.close()
 
