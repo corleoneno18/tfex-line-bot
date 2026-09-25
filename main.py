@@ -13,7 +13,9 @@ MONTH_MAP = {
 }
 
 def get_last_trading_day(symbol):
-    """คำนวณวันทำการก่อนวันสุดท้ายของเดือน จากชื่อสัญญา"""
+    """
+    คำนวณวันทำการก่อนวันสุดท้ายของเดือน จากชื่อสัญญา (เช่น S50U26, S50M27)
+    """
     match = re.match(r'S50([A-Z])(\d{2})', symbol)
     if not match:
         return None
@@ -25,12 +27,15 @@ def get_last_trading_day(symbol):
     
     year = 2000 + int(year_code)
     
+    # หาวันที่สุดท้ายของเดือน
     _, last_day = calendar.monthrange(year, month)
     dt = datetime(year, month, last_day)
     
+    # หาวันทำการสุดท้าย (ถ้าเป็น ส.-อา. ให้ถอยกลับมาวันศุกร์)
     while dt.weekday() >= 5: # 5 = เสาร์, 6 = อาทิตย์
         dt -= timedelta(days=1)
         
+    # ถอยลงมาอีก 1 วันทำการ เพื่อให้เป็น "วันทำการก่อนวันสุดท้าย"
     dt -= timedelta(days=1)
     while dt.weekday() >= 5:
         dt -= timedelta(days=1)
@@ -38,7 +43,7 @@ def get_last_trading_day(symbol):
     return dt
 
 def calculate_remaining_days(symbol):
-    """คำนวณจำนวนวันคงเหลือ"""
+    """คำนวณจำนวนวันคงเหลือจากวันปัจจุบัน ไปจนถึงวันทำการก่อนวันสุดท้าย"""
     last_trade_dt = get_last_trading_day(symbol)
     if not last_trade_dt:
         return "-"
@@ -61,16 +66,17 @@ def get_all_s50_symbols(page):
     
     text_content = page.locator("body").inner_text()
     symbols = list(dict.fromkeys(re.findall(r'S50[A-Z0-9]+', text_content)))
+    print(f"พบสัญญา SET50 ทั้งหมด {len(symbols)} รายการ: {symbols}")
     return symbols
 
 def get_symbol_overview_data(page, symbol):
-    """2. ดึงข้อมูลราคาและ OI ของสัญญา"""
+    """2. ดึงข้อมูลราคาและ OI ของแต่ละสัญญา"""
     quote_url = f"https://www.settrade.com/th/derivatives/quote/{symbol}/overview"
     print(f"กำลังดึงข้อมูลหน้า Overview ของ {symbol}...")
     
     try:
         page.goto(quote_url, wait_until="domcontentloaded", timeout=30000)
-        time.sleep(3)
+        time.sleep(2)
         
         body_text = page.locator("body").inner_text()
         
@@ -111,73 +117,71 @@ def get_symbol_overview_data(page, symbol):
         return None
 
 def fetch_investor_type_data(page):
-    """3. ดึงข้อมูลประเภทนักลงทุนทั้งจาก SET และ TFEX"""
+    """3. ดึงข้อมูลประเภทนักลงทุนทั้งจาก SET และ TFEX (ปรับแก้เพื่อป้องกัน Timeout)"""
     print("กำลังดึงข้อมูลประเภทนักลงทุน SET & TFEX...")
     
-    # 3.1 ดึงข้อมูล SET (Equity Index)
-    set_url = "https://www.settrade.com/th/equities/market-data/historical-report/investor-type"
-    page.goto(set_url, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_selector("table", timeout=30000)
-    time.sleep(3)
-    
     set_data = {}
-    rows = page.locator("table tbody tr").all()
-    for row in rows:
-        text = row.inner_text()
-        cols = [c.strip() for c in text.split("\t") if c.strip()]
-        if len(cols) >= 4:
-            inv_type = cols[0]
-            net_val = cols[3]
-            set_data[inv_type] = net_val
-
-    # 3.2 ดึงข้อมูล TFEX Derivatives
-    tfex_url = "https://www.settrade.com/th/derivatives/market-data/investor-type"
-    page.goto(tfex_url, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_selector("table", timeout=30000)
-    time.sleep(3)
-    
-    # ดึงตาราง TFEX
-    tfex_tables = page.locator("table").all()
     tfex_data = {
         "นักลงทุนต่างชาติ": {},
         "นักลงทุนสถาบัน": {},
         "บัญชีบริษัทหลักทรัพย์": {},
         "นักลงทุนภายในประเทศ": {}
     }
-    
-    categories = [
-        "Equity Index Futures", 
-        "Single Stock Futures", 
-        "Currency Futures", 
-        "Equity Index Call Options", 
-        "Equity Index Put Options"
-    ]
-    
-    # แมปประเภทนักลงทุน
-    investor_groups = [
-        "นักลงทุนต่างชาติ", 
-        "นักลงทุนสถาบัน", 
-        "นักลงทุนภายในประเทศ" # TFEX มักจะแบ่ง 3 กลุ่มหลัก
-    ]
 
-    for t_idx, table in enumerate(tfex_tables[:3]):
-        group_name = investor_groups[t_idx] if t_idx < len(investor_groups) else f"Group_{t_idx}"
-        t_rows = table.locator("tbody tr").all()
-        for r in t_rows:
-            r_text = r.inner_text()
-            for cat in categories:
-                if cat in r_text:
-                    cols = [c.strip() for c in r_text.split("\n") if c.strip()]
-                    if len(cols) >= 4:
-                        net_val = cols[-1] # ช่องสุทธิ
-                        tfex_data[group_name][cat] = net_val
+    # 3.1 ดึงข้อมูล SET (Equity Index)
+    try:
+        set_url = "https://www.settrade.com/th/equities/market-data/historical-report/investor-type"
+        page.goto(set_url, wait_until="domcontentloaded", timeout=60000)
+        time.sleep(3)
+        
+        rows = page.locator("table tbody tr").all()
+        for row in rows:
+            text = row.inner_text()
+            cols = [c.strip() for c in text.split("\t") if c.strip()]
+            if len(cols) >= 4:
+                inv_type = cols[0]
+                net_val = cols[3]
+                set_data[inv_type] = net_val
+    except Exception as e:
+        print(f"ข้อผิดพลาดขณะดึงข้อมูล SET: {e}")
+
+    # 3.2 ดึงข้อมูล TFEX Derivatives
+    try:
+        tfex_url = "https://www.settrade.com/th/derivatives/market-data/investor-type"
+        page.goto(tfex_url, wait_until="domcontentloaded", timeout=60000)
+        time.sleep(3)
+        
+        categories = [
+            "Equity Index Futures", 
+            "Single Stock Futures", 
+            "Currency Futures", 
+            "Equity Index Call Options", 
+            "Equity Index Put Options"
+        ]
+        
+        tables = page.locator("table").all()
+        groups_list = ["นักลงทุนต่างชาติ", "นักลงทุนสถาบัน", "บัญชีบริษัทหลักทรัพย์", "นักลงทุนภายในประเทศ"]
+        
+        for idx, table in enumerate(tables):
+            t_text = table.inner_text()
+            # ระบุกลุ่มนักลงทุนตามลำดับตารางที่พบ
+            group_key = groups_list[idx] if idx < len(groups_list) else None
+            if not group_key:
+                continue
+                
+            for line in t_text.split("\n"):
+                for cat in categories:
+                    if cat in line:
+                        parts = re.split(r'\s+', line.strip())
+                        if len(parts) >= 4:
+                            tfex_data[group_key][cat] = parts[-1]
+    except Exception as e:
+        print(f"ข้อผิดพลาดขณะดึงข้อมูล TFEX: {e}")
 
     return set_data, tfex_data
 
 def format_investor_summary(set_data, tfex_data):
     """4. จัดฟอร์แมตสรุปประเภทนักลงทุนพร้อม Emoji"""
-    
-    # รายชื่อกลุ่มนักลงทุนตามลำดับที่ต้องการ
     groups = [
         ("🌐 **นักลงทุนต่างชาติ**", "นักลงทุนต่างชาติ", "สถาบันต่างประเทศ"),
         ("🏦 **นักลงทุนสถาบัน**", "นักลงทุนสถาบัน", "นักลงทุนสถาบันในประเทศ"),
@@ -239,7 +243,6 @@ def fetch_all_data():
 
 def format_line_message(results, total_vol, total_oi, set_data, tfex_data):
     """6. รวมข้อความทั้งหมดเข้าด้วยกัน"""
-    
     # ส่วนที่ 1: สรุปประเภทนักลงทุน
     investor_summary = format_investor_summary(set_data, tfex_data)
     
@@ -262,7 +265,6 @@ def format_line_message(results, total_vol, total_oi, set_data, tfex_data):
     s50_summary = "\n\n".join(lines)
     s50_summary += f"\n\n📊 **สรุปรวม SET50 Futures ทั้งหมด**\n• ปริมาณการซื้อขายรวม: {total_vol:,} สัญญา\n• สถานะคงค้างรวม (OI): {total_oi:,} สัญญา"
     
-    # นำสองส่วนมาต่อกัน
     final_message = f"👥 **สรุปมูลค่าการซื้อขายตามประเภทนักลงทุน**\n\n{investor_summary}\n\n====================\n\n📈 **สรุป SET50 Futures วันนี้ (เรียงตาม OI สูงสุด):**\n\n{s50_summary}"
     return final_message
 
