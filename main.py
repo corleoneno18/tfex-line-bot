@@ -112,13 +112,13 @@ def get_symbol_overview_data(page, symbol):
         return None
 
 def fetch_investor_type_data(page):
-    """3. ดึงข้อมูลประเภทนักลงทุนอย่างแม่นยำ"""
+    """3. ดึงข้อมูลประเภทนักลงทุนทั้งจาก SET และ TFEX แบบอ่านโครงสร้างตารางตรง"""
     print("กำลังดึงข้อมูลประเภทนักลงทุน SET & TFEX...")
     
     set_data = {}
     tfex_data = {
-        "นักลงทุนต่างชาติ": {},
         "นักลงทุนสถาบัน": {},
+        "นักลงทุนต่างชาติ": {},
         "บัญชีบริษัทหลักทรัพย์": {},
         "นักลงทุนภายในประเทศ": {}
     }
@@ -127,6 +127,7 @@ def fetch_investor_type_data(page):
     try:
         set_url = "https://www.settrade.com/th/equities/market-data/historical-report/investor-type"
         page.goto(set_url, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_selector("table", timeout=30000)
         time.sleep(3)
         
         rows = page.locator("table tbody tr").all()
@@ -135,23 +136,24 @@ def fetch_investor_type_data(page):
             lines = [line.strip() for line in text.split("\n") if line.strip()]
             if len(lines) >= 4:
                 inv_type = lines[0]
-                net_val = lines[-1]  # ช่องสุทธิ
+                net_val = lines[-1]
                 
                 if "ต่างชาติ" in inv_type:
                     set_data["นักลงทุนต่างชาติ"] = net_val
                 elif "สถาบัน" in inv_type:
                     set_data["นักลงทุนสถาบัน"] = net_val
-                elif "บัญชีบริษัทหลักทรัพย์" in inv_type or "บัญชี บล." in inv_type:
+                elif "บริษัทหลักทรัพย์" in inv_type or "บัญชี บล." in inv_type:
                     set_data["บัญชีบริษัทหลักทรัพย์"] = net_val
                 elif "รายย่อย" in inv_type or "ในประเทศ" in inv_type:
                     set_data["นักลงทุนภายในประเทศ"] = net_val
     except Exception as e:
         print(f"ข้อผิดพลาดขณะดึงข้อมูล SET: {e}")
 
-    # 3.2 ดึงข้อมูล TFEX Derivatives
+    # 3.2 ดึงข้อมูล TFEX Derivatives (แกะแถวตารางแยกคอลัมน์สุทธิ 3 กลุ่ม)
     try:
         tfex_url = "https://www.settrade.com/th/derivatives/market-data/investor-type"
         page.goto(tfex_url, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_selector("table", timeout=30000)
         time.sleep(3)
         
         categories = [
@@ -161,37 +163,24 @@ def fetch_investor_type_data(page):
             "Equity Index Call Options", 
             "Equity Index Put Options"
         ]
-        
-        # ค้นหาปุ่ม Tab บนหน้าเว็บ TFEX และกดคลิกทีละ Tab
-        tabs = [
-            ("นักลงทุนต่างชาติ", ["ต่างชาติ", "Foreign"]),
-            ("นักลงทุนสถาบัน", ["สถาบัน", "Institutional"]),
-            ("นักลงทุนภายในประเทศ", ["ในประเทศ", "Retail", "Individual"])
-        ]
 
-        for group_key, keywords in tabs:
-            # ค้นหาและคลิก Tab
-            for kw in keywords:
-                tab_btn = page.locator(f"button:has-text('{kw}'), a:has-text('{kw}'), li:has-text('{kw}')").first
-                if tab_btn.is_visible():
-                    tab_btn.click()
-                    time.sleep(1)
-                    break
-
-            # แกะตารางที่แสดงผลในขณะนั้น
-            body_text = page.locator("body").inner_text()
+        rows = page.locator("table tbody tr").all()
+        for row in rows:
+            row_text = row.inner_text().strip()
             for cat in categories:
-                pattern = rf"{cat}\s+[\d\,\.-]+\s+[\d\,\.-]+\s+([\+\-]?[\d\,\.]+)"
-                match = re.search(pattern, body_text)
-                if match:
-                    tfex_data[group_key][cat] = match.group(1)
-                else:
-                    # ค้นหาแบบสแกนบรรทัด
-                    for line in body_text.split("\n"):
-                        if cat in line:
-                            parts = re.split(r'\s+', line.strip())
-                            if len(parts) >= 2:
-                                tfex_data[group_key][cat] = parts[-1]
+                if cat in row_text:
+                    # แยกข้อมูลในแถวด้วย newline หรือ space
+                    parts = [p.strip() for p in re.split(r'[\n\t]+', row_text) if p.strip()]
+                    
+                    # โครงสร้างแถว: [สินค้า, ซื้อ1, ขาย1, สุทธิ1(สถาบัน), ซื้อ2, ขาย2, สุทธิ2(ต่างชาติ), ซื้อ3, ขาย3, สุทธิ3(ในประเทศ), รวม]
+                    # หาตำแหน่งตัวเลขทั้งหมดในแถว
+                    nums = parts[1:] # ตัดชื่อสินค้าออก
+                    
+                    if len(nums) >= 9:
+                        tfex_data["นักลงทุนสถาบัน"][cat] = nums[2]
+                        tfex_data["นักลงทุนต่างชาติ"][cat] = nums[5]
+                        tfex_data["นักลงทุนภายในประเทศ"][cat] = nums[8]
+                    break
     except Exception as e:
         print(f"ข้อผิดพลาดขณะดึงข้อมูล TFEX: {e}")
 
