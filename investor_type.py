@@ -1,50 +1,48 @@
 import os
-import re
-import time
 import requests
-from playwright.sync_api import sync_playwright
 
-def fetch_investor_type_data(page):
-    """ดึงข้อมูลสรุปประเภทนักลงทุน TFEX"""
+def fetch_investor_type_data():
+    """ดึงข้อมูลประเภทนักลงทุน TFEX โดยตรงจาก API ของ Settrade"""
     tfex_data = {
         "นักลงทุนสถาบัน": {},
         "นักลงทุนต่างชาติ": {},
         "นักลงทุนภายในประเทศ": {}
     }
 
-    print("กำลังดึงข้อมูลประเภทนักลงทุน TFEX...")
+    print("กำลังดึงข้อมูลประเภทนักลงทุน TFEX จาก API...")
+    url = "https://api.settrade.com/api/market/derivatives/investor-type"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://www.settrade.com/"
+    }
+
     try:
-        # ใช้ domcontentloaded เพื่อไม่ให้ติด Timeout จาก networkidle
-        page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="domcontentloaded", timeout=30000)
-        
-        # เจาะจงรอให้ตารางแสดงผลขึ้นมาก่อน
-        page.wait_for_selector("table", timeout=15000)
-        time.sleep(3) # รอให้ตัวเลขในตารางโหลดเสร็จสมบูรณ์
-        
-        # ดึงข้อความทั้งหมดในหน้ามาวิเคราะห์
-        text_content = page.locator("body").inner_text()
-        
-        categories = [
-            "Equity Index Futures",
-            "Single Stock Futures",
-            "Currency Futures",
-            "Equity Index Call Options",
-            "Equity Index Put Options"
-        ]
+        res = requests.get(url, headers=headers, timeout=15)
+        if res.status_code == 200:
+            data = res.json()
+            # รองรับทั้งโครงสร้างที่เป็น list ของ items หรือเป็น dict
+            items = data.get("investorTypes", []) if isinstance(data, dict) else data
+            
+            for item in items:
+                # ดึงชื่อประเภทสินค้า เช่น Equity Index Futures
+                cat = item.get("derivativesType", "") or item.get("symbolGroup", "")
+                if cat:
+                    # แปลงตัวเลขเป็นข้อความพร้อมเครื่องหมาย +/-, ตัวอย่าง: +28,716
+                    def fmt(val):
+                        if val is None or val == "-": return "-"
+                        try:
+                            n = int(val)
+                            return f"+{n:,}" if n > 0 else f"{n:,}"
+                        except:
+                            return str(val)
 
-        lines = text_content.split('\n')
-        for line in lines:
-            for cat in categories:
-                if cat in line:
-                    # ค้นหาตัวเลขที่มีเครื่องหมาย +/- หรือตัวเลขปกติ
-                    nums = re.findall(r'[-+]?\d{1,3}(?:,\d{3})*', line)
-                    if len(nums) >= 3:
-                        tfex_data["นักลงทุนสถาบัน"][cat] = nums[0]
-                        tfex_data["นักลงทุนต่างชาติ"][cat] = nums[1]
-                        tfex_data["นักลงทุนภายในประเทศ"][cat] = nums[2]
-
+                    tfex_data["นักลงทุนสถาบัน"][cat] = fmt(item.get("institutionNet", item.get("instNet", "-")))
+                    tfex_data["นักลงทุนต่างชาติ"][cat] = fmt(item.get("foreignNet", item.get("foreignNet", "-")))
+                    tfex_data["นักลงทุนภายในประเทศ"][cat] = fmt(item.get("individualNet", item.get("customerNet", "-")))
+        else:
+            print(f"API Response Status Code: {res.status_code}")
     except Exception as e:
-        print(f"Error TFEX Investor Type: {e}")
+        print(f"Error fetching API: {e}")
 
     return tfex_data
 
@@ -92,17 +90,7 @@ def send_line_message(message):
     print(f"--- LINE API RESULT --- Status: {res.status_code}")
 
 if __name__ == "__main__":
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-        page = context.new_page()
-
-        tfex_data = fetch_investor_type_data(page)
-        msg = format_investor_message(tfex_data)
-        
-        browser.close()
-
-        send_line_message(msg)
-        print("ส่งสรุปประเภทนักลงทุนเข้า LINE สำเร็จ!")
+    tfex_data = fetch_investor_type_data()
+    msg = format_investor_message(tfex_data)
+    send_line_message(msg)
+    print("ส่งสรุปประเภทนักลงทุนเข้า LINE สำเร็จ!")
