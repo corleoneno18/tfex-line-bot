@@ -1,7 +1,7 @@
 import os
 import requests
 from bs4 import BeautifulSoup
-import google.generativeai as genai
+from google import genai
 
 def get_tfex_data():
     url = "https://www.settrade.com/th/derivatives/market-data/trading-quotation-by-series"
@@ -16,10 +16,7 @@ def get_tfex_data():
 
 def summarize_with_gemini(raw_data):
     api_key = os.environ.get("GEMINI_API_KEY")
-    genai.configure(api_key=api_key)
-    
-    # ใช้ SDK ตัวมาตรฐาน gemini-2.5-flash
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    client = genai.Client(api_key=api_key)
     
     prompt = f"""
     จากข้อมูลตลาด TFEX ด้านล่างนี้ ให้สกัดข้อมูลของ SET50 Futures ทุก Series ที่พบ 
@@ -30,7 +27,10 @@ def summarize_with_gemini(raw_data):
     {raw_data}
     """
     
-    response = model.generate_content(prompt)
+    response = client.models.generate_content(
+        model="gemini-3.8-flash",
+        contents=prompt
+    )
     return response.text
 
 def send_line_message(message):
