@@ -6,7 +6,7 @@ from google import genai
 from playwright.sync_api import sync_playwright
 
 def get_tfex_data_via_playwright():
-    """เปิดหน้าเว็บ Settrade ผ่าน Headless Browser เพื่อรอตาราง Render สมบูรณ์"""
+    """เปิดหน้าเว็บ Settrade ผ่าน Headless Browser โดยรอเฉพาะ Element ตาราง"""
     url = "https://www.settrade.com/th/derivatives/market-data/trading-quotation-by-series"
     print("กำลังเปิดเบราว์เซอร์เพื่อดึงข้อมูลตาราง TFEX...")
     
@@ -18,9 +18,13 @@ def get_tfex_data_via_playwright():
         page = context.new_page()
         
         try:
-            page.goto(url, wait_until="networkidle", timeout=30000)
-            page.wait_for_selector("table", timeout=15000)
-            time.sleep(3)
+            # เปลี่ยนการรอเป็น domcontentloaded และขยาย Timeout เป็น 60 วินาที
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            
+            # รอให้มีตารางราคาโผล่ขึ้นมาบนหน้าเว็บ
+            print("กำลังรอโหลดตารางราคา...")
+            page.wait_for_selector("table", timeout=30000)
+            time.sleep(5)  # รอให้ข้อมูลตัวเลขในตาราง Render ครบถ้วน
             
             content = page.locator("body").inner_text()
             browser.close()
@@ -38,7 +42,6 @@ def fallback_parse_text(raw_text):
     matches = re.findall(pattern, raw_text)
     
     if not matches:
-        # หากค้นหาแพทเทิร์นตารางแบบละเอียดไม่เจอ ให้ส่งข้อความแจ้งเตือนพร้อมข้อมูลบางส่วน
         return "ไม่สามารถประมวลผลรูปแบบตารางได้ในขณะนี้"
         
     lines = []
