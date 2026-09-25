@@ -43,9 +43,8 @@ def get_symbol_overview_data(page, symbol):
         open_p = extract_val(r'ราคาเปิด\s*([0-9\,\.]+)', body_text)
         vol = extract_val(r'ปริมาณ\s*\(สัญญา\)\s*([0-9\,]+)', body_text)
         oi = extract_val(r'สถานะคงค้าง\s*\(สัญญา\)\s*([0-9\,]+)', body_text)
-        bid_offer = extract_val(r'ราคาเสนอซื้อ\s*/\s*ปริมาณเสนอซื้อ\s*([0-9\.\,\s/]+)', body_text)
 
-        # แปลงตัวเลข ปริมาณ และ OI สำหรับคำนวณผลรวม
+        # แปลงตัวเลข ปริมาณ และ OI สำหรับคำนวณผลรวมและการเรียงลำดับ
         vol_num = int(vol.replace(',', '')) if vol.replace(',', '').isdigit() else 0
         oi_num = int(oi.replace(',', '')) if oi.replace(',', '').isdigit() else 0
 
@@ -95,9 +94,12 @@ def fetch_all_data():
         return results, total_vol, total_oi
 
 def format_line_message(results, total_vol, total_oi):
-    """4. จัดข้อความส่งเข้า LINE"""
+    """4. จัดเรียงลำดับตาม OI (มากไปน้อย) และจัดข้อความส่งเข้า LINE"""
+    # เรียงลำดับจากค่า oi_num มากที่สุดไปหาน้อยที่สุด
+    results_sorted = sorted(results, key=lambda x: x["oi_num"], reverse=True)
+    
     lines = []
-    for item in results:
+    for item in results_sorted:
         lines.append(
             f"📌 **[{item['symbol']}]**\n"
             f"• ราคาล่าสุด: {item['last']} {item['change_pct']}\n"
@@ -127,7 +129,7 @@ def send_line_message(message):
         "messages": [
             {
                 "type": "text",
-                "text": f"📊 สรุป SET50 Futures วันนี้:\n\n{message}"
+                "text": f"📊 สรุป SET50 Futures วันนี้ (เรียงตาม OI สูงสุด):\n\n{message}"
             }
         ]
     }
