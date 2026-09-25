@@ -1,9 +1,70 @@
 import os
 import re
 import time
+import calendar
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
+
+# รหัสเดือนของ TFEX
+MONTH_MAP = {
+    'F': 1,  # ม.ค.
+    'G': 2,  # ก.พ.
+    'H': 3,  # มี.ค.
+    'J': 4,  # เม.ย.
+    'K': 5,  # พ.ค.
+    'M': 6,  # มิ.ย.
+    'N': 7,  # ก.ค.
+    'Q': 8,  # ส.ค.
+    'U': 9,  # ก.ย.
+    'V': 10, # ต.ค.
+    'X': 11, # พ.ย.
+    'Z': 12  # ธ.ค.
+}
+
+def get_last_trading_day(symbol):
+    """
+    คำนวณวันทำการก่อนวันสุดท้ายของเดือน จากชื่อสัญญา (เช่น S50U26, S50M27)
+    """
+    match = re.match(r'S50([A-Z])(\d{2})', symbol)
+    if not match:
+        return None
+    
+    month_code, year_code = match.groups()
+    month = MONTH_MAP.get(month_code)
+    if not month:
+        return None
+    
+    year = 2000 + int(year_code)
+    
+    # หาวันที่สุดท้ายของเดือน
+    _, last_day = calendar.monthrange(year, month)
+    dt = datetime(year, month, last_day)
+    
+    # หาวันทำการสุดท้าย (ถ้าเป็น ส.-อา. ให้ถอยกลับมาวันศุกร์)
+    while dt.weekday() >= 5: # 5 = เสาร์, 6 = อาทิตย์
+        dt -= timedelta(days=1)
+        
+    # ถอยลงมาอีก 1 วันทำการ เพื่อให้เป็น "วันทำการก่อนวันสุดท้าย"
+    dt -= timedelta(days=1)
+    while dt.weekday() >= 5:
+        dt -= timedelta(days=1)
+        
+    return dt
+
+def calculate_remaining_days(symbol):
+    """คำนวณจำนวนวันคงเหลือจากวันปัจจุบัน ไปจนถึงวันทำการก่อนวันสุดท้าย"""
+    last_trade_dt = get_last_trading_day(symbol)
+    if not last_trade_dt:
+        return "-"
+    
+    today = datetime.now().date()
+    target_date = last_trade_dt.date()
+    
+    delta = (target_date - today).days
+    if delta < 0:
+        return "หมดอายุแล้ว"
+    return f"{delta} วัน"
 
 def get_all_s50_symbols(page):
     """1. ดึงรายชื่อสัญญาทั้งหมดจากหน้าตารางรวม"""
@@ -18,32 +79,8 @@ def get_all_s50_symbols(page):
     print(f"พบสัญญา SET50 ทั้งหมด {len(symbols)} รายการ: {symbols}")
     return symbols
 
-def parse_thai_expiry_date(expiry_text):
-    """
-    แปลงข้อความเฉพาะเดือน/ปี เช่น 'ก.ย. 2569' เป็น วันที่สุดท้ายของเดือนนั้น
-    """
-    thai_months = {
-        "ม.ค.": (1, 31), "ก.พ.": (2, 28), "มี.ค.": (3, 31), "เม.ย.": (4, 30),
-        "พ.ค.": (5, 31), "มิ.ย.": (6, 30), "ก.ค.": (7, 31), "ส.ค.": (8, 31),
-        "ก.ย.": (9, 30), "ต.ค.": (10, 31), "พ.ย.": (11, 30), "ธ.ค.": (12, 31)
-    }
-    try:
-        # ค้นหา 패턴 เดือน และ ปี พ.ศ. แบบเจาะจง (เช่น ก.ย. 2569)
-        m = re.search(r'([ก-ฮ\.]+)\s+(\d{4})', expiry_text)
-        if m:
-            m_str = m.group(1)
-            year_th = int(m.group(2))
-            year_ce = year_th - 543
-            
-            if m_str in thai_months:
-                month_num, last_day = thai_months[m_str]
-                return datetime(year_ce, month_num, last_day), f"{m_str} {year_th}"
-    except Exception as e:
-        print(f"เกิดข้อผิดพลาดในการแปลงวันที่ ({expiry_text}): {e}")
-    return None, expiry_text
-
 def get_symbol_overview_data(page, symbol):
-    """2. เข้าหน้า Overview ของแต่ละสัญญาเพื่อแกะค่าตัวเลขและวันหมดอายุอย่างแม่นยำ"""
+    """2. เข้าหน้า Overview ของแต่ละสัญญาเพื่อแกะค่าตัวเลข"""
     quote_url = f"https://www.settrade.com/th/derivatives/quote/{symbol}/overview"
     print(f"กำลังดึงข้อมูลหน้า Overview ของ {symbol}...")
     
@@ -67,25 +104,14 @@ def get_symbol_overview_data(page, symbol):
         vol = extract_val(r'ปริมาณ\s*\(สัญญา\)\s*([0-9\,]+)', body_text)
         oi = extract_val(r'สถานะคงค้าง\s*\(สัญญา\)\s*([0-9\,]+)', body_text)
         
-        # ดึงข้อความเดือนหมดอายุแบบระบุเจาะจงเฉพาะ 패턴 'เดือนหมดอายุ: [ชื่อเดือน] [ปี]'
-        raw_expiry = extract_val(r'เดือนหมดอายุ:\s*([ก-ฮ\.]+\s+\d{4})', body_text)
-        
-        # คำนวณวันคงเหลือ
-        remaining_days_str = "-"
-        clean_expiry_info = raw_expiry
-        if raw_expiry != "-":
-            expire_date, clean_expiry_info = parse_thai_expiry_date(raw_expiry)
-            if expire_date:
-                today = datetime.now()
-                delta = (expire_date.date() - today.date()).days
-                remaining_days_str = f"{delta} วัน" if delta >= 0 else "หมดอายุแล้ว"
+        # คำนวณวันคงเหลือจาก Symbol โดยตรง
+        remaining_days_str = calculate_remaining_days(symbol)
 
         vol_num = int(vol.replace(',', '')) if vol.replace(',', '').isdigit() else 0
         oi_num = int(oi.replace(',', '')) if oi.replace(',', '').isdigit() else 0
 
         return {
             "symbol": symbol,
-            "expiry_info": clean_expiry_info,
             "remaining_days": remaining_days_str,
             "last": last,
             "change_pct": change_pct,
@@ -131,14 +157,13 @@ def fetch_all_data():
         return results, total_vol, total_oi
 
 def format_line_message(results, total_vol, total_oi):
-    """4. จัดเรียงลำดับตาม OI (มากไปน้อย) และจัดข้อความ"""
+    """4. จัดเรียงลำดับตาม OI (มากไปน้อย) และจัดข้อความแสดงเฉพาะวันคงเหลือ"""
     results_sorted = sorted(results, key=lambda x: x["oi_num"], reverse=True)
     
     lines = []
     for item in results_sorted:
         lines.append(
             f"📌 **[{item['symbol']}]**\n"
-            f"• เดือนหมดอายุ: {item['expiry_info']}\n"
             f"• วันคงเหลือ: {item['remaining_days']}\n"
             f"• ราคาล่าสุด: {item['last']} {item['change_pct']}\n"
             f"• ราคาเปิด: {item['open']}\n"
