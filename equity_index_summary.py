@@ -1,5 +1,4 @@
 import os
-import re
 import time
 import requests
 from playwright.sync_api import sync_playwright
@@ -38,33 +37,24 @@ def fetch_equity_index_data():
             except Exception:
                 pass
             
-            rows = page.locator("tr").all()
+            # ดึงแถวทั้งหมดในตาราง
+            rows = page.locator("table tbody tr").all()
             for r in rows:
-                row_text = " ".join(r.text_content().split())
-                
-                # ตรวจจับแถวกลุ่มนักลงทุน
-                matched_key = None
-                if "สถาบันในประเทศ" in row_text or "สถาบัน" in row_text:
-                    matched_key = "นักลงทุนสถาบัน"
-                elif "บัญชีบริษัทหลักทรัพย์" in row_text or "หลักทรัพย์" in row_text:
-                    matched_key = "บัญชีบริษัทหลักทรัพย์"
-                elif "นักลงทุนต่างประเทศ" in row_text or "ต่างชาติ" in row_text:
-                    matched_key = "นักลงทุนต่างชาติ"
-                elif "นักลงทุนทั่วไปในประเทศ" in row_text or "ภายในประเทศ" in row_text:
-                    matched_key = "นักลงทุนภายในประเทศ"
-                
-                if matched_key:
-                    # ดึง td ทั้งหมดในแถวนั้นเพื่อหาคอลัมน์สุทธิรายวัน
-                    tds = r.locator("td").all()
-                    if len(tds) >= 5:
-                        # คอลัมน์ที่ 5 (index 4) คือ ยอดสุทธิรายวัน
-                        daily_net_text = tds[4].text_content().strip()
-                        equity_data[matched_key] = format_number_with_sign(daily_net_text)
-                    else:
-                        # สำรองกรณีดึง td ไม่ได้ ใช้ regex ดึงตัวเลขกลุ่มแรกๆ (สุทธิรายวันคือตัวเลขที่ 5 ของแถว)
-                        nums = re.findall(r'[-+]?\d{1,3}(?:,\d{3})*(?:\.\d+)?|-', row_text)
-                        if len(nums) >= 5:
-                            equity_data[matched_key] = format_number_with_sign(nums[4])
+                tds = r.locator("td").all()
+                if len(tds) >= 5:
+                    investor_type = tds[0].text_content().strip()
+                    # คอลัมน์Index 4 คือช่อง "สุทธิ" ของช่วงรายวัน
+                    daily_net_val = tds[4].text_content().strip()
+                    formatted_val = format_number_with_sign(daily_net_val)
+                    
+                    if "สถาบัน" in investor_type:
+                        equity_data["นักลงทุนสถาบัน"] = formatted_val
+                    elif "หลักทรัพย์" in investor_type:
+                        equity_data["บัญชีบริษัทหลักทรัพย์"] = formatted_val
+                    elif "ต่างประเทศ" in investor_type or "ต่างชาติ" in investor_type:
+                        equity_data["นักลงทุนต่างชาติ"] = formatted_val
+                    elif "ทั่วไปในประเทศ" in investor_type or "ภายในประเทศ" in investor_type:
+                        equity_data["นักลงทุนภายในประเทศ"] = formatted_val
 
         except Exception as e:
             print(f"Playwright SET Error: {e}")
