@@ -112,7 +112,7 @@ def get_symbol_overview_data(page, symbol):
         return None
 
 def fetch_investor_type_data(page):
-    """3. ดึงข้อมูลประเภทนักลงทุนทั้งจาก SET และ TFEX"""
+    """3. ดึงข้อมูลประเภทนักลงทุนทั้งจาก SET (รายวัน) และ TFEX"""
     print("กำลังดึงข้อมูลประเภทนักลงทุน SET & TFEX...")
     
     set_data = {
@@ -128,37 +128,37 @@ def fetch_investor_type_data(page):
         "นักลงทุนภายในประเทศ": {}
     }
 
-    # 3.1 ดึงข้อมูล SET (Equity Index) จากตารางรายวัน
+    # 3.1 ดึงข้อมูล SET (Equity Index) รายวัน
     try:
         set_url = "https://www.settrade.com/th/equities/market-data/historical-report/investor-type"
-        page.goto(set_url, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_selector("table", timeout=30000)
+        page.goto(set_url, wait_until="networkidle", timeout=60000)
+        page.wait_for_selector("table tbody tr", timeout=30000)
         time.sleep(3)
         
         rows = page.locator("table tbody tr").all()
         for row in rows:
-            # ดึงเฉพาะ td ในแต่ละ tr เพื่อเลี่ยงการแยก string ผิดพลาด
-            cols = [td.inner_text().strip() for td in row.locator("td").all()]
-            if len(cols) >= 6:
-                inv_type = cols[0]
-                net_val = cols[5]  # ช่อง 'สุทธิ' อยู่ที่ col index 5 (6th element)
+            tds = row.locator("td").all()
+            if len(tds) >= 6:
+                inv_type = tds[0].inner_text().strip()
+                # ช่อง "สุทธิ" รายวัน จะเป็น td ลำดับที่ 6 (Index 5)
+                daily_net = tds[5].inner_text().strip()
                 
-                if "ต่างประเทศ" in inv_type or "ต่างชาติ" in inv_type:
-                    set_data["นักลงทุนต่างชาติ"] = net_val
-                elif "สถาบัน" in inv_type:
-                    set_data["นักลงทุนสถาบัน"] = net_val
+                if "สถาบัน" in inv_type:
+                    set_data["นักลงทุนสถาบัน"] = daily_net
                 elif "บริษัทหลักทรัพย์" in inv_type or "บัญชี บล." in inv_type:
-                    set_data["บัญชีบริษัทหลักทรัพย์"] = net_val
-                elif "ทั่วไป" in inv_type or "ในประเทศ" in inv_type:
-                    set_data["นักลงทุนภายในประเทศ"] = net_val
+                    set_data["บัญชีบริษัทหลักทรัพย์"] = daily_net
+                elif "ต่างประเทศ" in inv_type or "ต่างชาติ" in inv_type:
+                    set_data["นักลงทุนต่างชาติ"] = daily_net
+                elif "ในประเทศ" in inv_type or "ทั่วไป" in inv_type:
+                    set_data["นักลงทุนภายในประเทศ"] = daily_net
     except Exception as e:
         print(f"ข้อผิดพลาดขณะดึงข้อมูล SET: {e}")
 
     # 3.2 ดึงข้อมูล TFEX Derivatives
     try:
         tfex_url = "https://www.settrade.com/th/derivatives/market-data/investor-type"
-        page.goto(tfex_url, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_selector("table", timeout=30000)
+        page.goto(tfex_url, wait_until="networkidle", timeout=60000)
+        page.wait_for_selector("table tbody tr", timeout=30000)
         time.sleep(3)
         
         categories = [
