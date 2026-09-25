@@ -47,16 +47,18 @@ def calculate_remaining_days(symbol):
     return f"{delta} วัน"
 
 def fetch_set_investor_api():
-    """ดึงข้อมูลประเภทนักลงทุน SET จาก API ตรงของ Settrade"""
+    """ดึงข้อมูลประเภทนักลงทุน SET จาก API ตรงของ Settrade เลี่ยงการโหลดตารางบนหน้าเว็บ"""
     set_data = {
         "นักลงทุนสถาบัน": "-",
         "บัญชีบริษัทหลักทรัพย์": "-",
         "นักลงทุนต่างชาติ": "-",
         "นักลงทุนภายในประเทศ": "-"
     }
+    
+    # ยิงดึง API ตรงของ SET
     url = "https://api.settrade.com/api/set/market/investor-type"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": "https://www.settrade.com/"
     }
     
@@ -64,13 +66,11 @@ def fetch_set_investor_api():
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
             data = res.json()
-            # ตรวจสอบโครงสร้างรายการจาก API
             items = data.get("investorTypes", []) or data.get("data", [])
             for item in items:
                 name = item.get("investorTypeName", "") or item.get("name", "")
                 net_val = item.get("netValue", item.get("net", "-"))
                 
-                # ฟอร์แมตตัวเลขให้มีเครื่องหมายคอมม่า
                 if isinstance(net_val, (int, float)):
                     net_val = f"{net_val:,.2f}"
                 
@@ -155,20 +155,18 @@ def fetch_all_data_hybrid():
             except Exception as e:
                 print(f"ข้าม {sym}: {e}")
 
-        # 3. ดึง TFEX (ทำงานได้ดีแล้ว)
+        # 3. ดึง TFEX
         try:
             page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="domcontentloaded", timeout=30000)
             time.sleep(3)
             cats = ["Equity Index Futures", "Single Stock Futures", "Currency Futures", "Equity Index Call Options", "Equity Index Put Options"]
             
-            # ใช้การดึงจาก Text Content โดยตรง เพื่อข้ามปัญหาโครงสร้างตาราง
             page_text = page.locator("body").inner_text()
             lines = page_text.split('\n')
             for line in lines:
                 for cat in cats:
                     if cat in line:
                         parts = [p.strip() for p in line.split() if p.strip()]
-                        # หากเป็นบรรทัดที่มีข้อมูลตัวเลข
                         nums = [p for p in parts if re.match(r'^[\+\-0-9\,\.]+$', p)]
                         if len(nums) >= 3:
                             tfex_data["นักลงทุนสถาบัน"][cat] = nums[0]
