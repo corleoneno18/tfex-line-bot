@@ -23,7 +23,6 @@ def get_tfex_data_via_playwright():
             page.wait_for_selector("table", timeout=30000)
             time.sleep(5)  # รอให้ข้อมูลตัวเลข Render ครบ
             
-            # ดึงข้อความและ HTML
             text_content = page.locator("body").inner_text()
             html_content = page.content()
             browser.close()
@@ -34,28 +33,61 @@ def get_tfex_data_via_playwright():
             browser.close()
             return None, None
 
-def fallback_parse_content(text_content, html_content):
-    """ฟังก์ชันสกัดข้อมูลสำรอง กรณี Gemini API ไม่พร้อมใช้งาน"""
-    print("สลับมาใช้ระบบ Fallback Extractor...")
+def fallback_parse_content(text_content):
+    """สกัดข้อมูลตาราง Settrade TFEX และติดป้ายกำกับหัวข้อรวมถึงราคาเฉลี่ย"""
+    print("สลับมาใช้ระบบ Fallback Regex Extractor (เพิ่มราคาเฉลี่ย)...")
     
-    # 1. ลองใช้ Regex แบบยืดหยุ่นหาจาก Text Content
-    symbols = re.findall(r'S50[A-Z0-9]+', text_content)
-    unique_symbols = list(dict.fromkeys(symbols))  # กรองตัวซ้ำ
+    # Pattern จับแถวตาราง TFEX: [Symbol] [Month/Year] [Last] [Chg] [%Chg] [Open] [High] [Low] [Avg] [Vol] [OI]
+    pattern = r'(S50[A-Z0-9]+)\s+([ก-ฮa-zA-Z\.\s\d]+?)\s+([\d\.\,\-]+)\s+([\+\-\d\.\,]+)\s+([\+\-\d\.\,%]+)\s+([\d\.\,\-]+)\s+([\d\.\,\-]+)\s+([\d\.\,\-]+)\s+([\d\,]+)\s+([\d\,]+)'
+    matches = re.findall(pattern, text_content)
     
-    if unique_symbols:
-        lines = []
-        for sym in unique_symbols:
-            # ค้นหาบรรทัดที่มีชื่อสัญลักษณ์
-            pattern = re.escape(sym) + r'[\s\S]{1,100}'
-            match = re.search(pattern, text_content)
+    lines = []
+    total_vol = 0
+    total_oi = 0
+    
+    if matches:
+        for m in matches:
+            sym, month, last, chg, pct, high, low, avg_p, vol, oi = m
+            
+            # คำนวณผลรวม
+            v_num = int(vol.replace(',', '')) if vol.replace(',', '').isdigit() else 0
+            o_num = int(oi.replace(',', '')) if oi.replace(',', '').isdigit() else 0
+            total_vol += v_num
+            total_oi += o_num
+            
+            lines.append(
+                f"📌 [{sym}] ({month.strip()})\n"
+                f"• ราคาล่าสุด: {last}\n"
+                f"• เปลี่ยนแปลง: {chg} ({pct})\n"
+                f"• ราคาสูงสุด / ต่ำสุด: {high} / {low}\n"
+                f"• ราคาเฉลี่ย: {avg_p}\n"
+                f"• ปริมาณซื้อขาย: {vol} สัญญา\n"
+                f"• สถานะคงค้าง (OI): {oi} สัญญา"
+            )
+    else:
+        # หากค้นหาแพทเทิร์นตารางแบบละเอียดไม่เจอ ให้ใช้ Regex ค้นหาตัวเลขเบื้องต้น
+        symbols = list(dict.fromkeys(re.findall(r'S50[A-Z0-9]+', text_content)))
+        for sym in symbols:
+            match = re.search(re.escape(sym) + r'[\s\S]{1,120}', text_content)
             if match:
-                snippet = match.group(0).replace('\n', ' ')
-                lines.append(f"📌 [{sym}]\n• ข้อมูล: {snippet[:80]}...")
-        
-        if lines:
-            return "\n\n".join(lines)
+                raw_line = match.group(0).replace('\n', ' ')
+                tokens = raw_line.split()
+                if len(tokens) >= 9:
+                    lines.append(
+                        f"📌 [{sym}]\n"
+                        f"• ราคาล่าสุด: {tokens[3] if len(tokens)>3 else '-'}\n"
+                        f"• เปลี่ยนแปลง: {tokens[4] if len(tokens)>4 else '-'} ({tokens[5] if len(tokens)>5 else '-'})\n"
+                        f"• ราคาสูงสุด / ต่ำสุด: {tokens[6] if len(tokens)>6 else '-'} / {tokens[7] if len(tokens)>7 else '-'}\n"
+                        f"• ราคาเฉลี่ย: {tokens[8] if len(tokens)>8 else '-'}"
+                    )
 
-    return "ระบบไม่สามารถดึงข้อมูลตารางได้ กรุณาตรวจสอบหน้าเว็บ Settrade อีกครั้ง"
+    if lines:
+        summary_text = "\n\n".join(lines)
+        if total_vol > 0 or total_oi > 0:
+            summary_text += f"\n\n📊 **สรุปผลรวม**\n• ปริมาณซื้อขายรวม: {total_vol:,} สัญญา\n• สถานะคงค้างรวม (OI): {total_oi:,} สัญญา"
+        return summary_text
+
+    return "ระบบไม่สามารถจัดรูปแบบตารางได้ กรุณาตรวจสอบหน้าเว็บ Settrade อีกครั้ง"
 
 def summarize_with_gemini(raw_text):
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -68,8 +100,8 @@ def summarize_with_gemini(raw_text):
     📌 [ชื่อย่อสัญญา]
     • ราคาล่าสุด: 
     • เปลี่ยนแปลง: (พร้อม %)
-    • สูงสุด / ต่ำสุด: 
-    • ราคาเปิด / เฉลี่ย: 
+    • ราคาสูงสุด / ต่ำสุด: 
+    • ราคาเฉลี่ย: 
     • ปริมาณ (สัญญา): 
     • สถานะคงค้าง (OI): 
 
@@ -79,7 +111,7 @@ def summarize_with_gemini(raw_text):
     {raw_text[:15000]}
     """
     
-    max_retries = 5
+    max_retries = 3
     for attempt in range(max_retries):
         try:
             print(f"กำลังเรียก Gemini API ครั้งที่ {attempt + 1}...")
@@ -90,15 +122,10 @@ def summarize_with_gemini(raw_text):
             if response.text and "📌" in response.text:
                 print("Gemini ประมวลผลสำเร็จ!")
                 return response.text
-            elif response.text:
-                print("Gemini ตอบกลับแต่รูปแบบไม่สมบูรณ์ กำลังลองใหม่...")
         except Exception as e:
-            err_msg = str(e)
-            print(f"ข้อผิดพลาดจาก Gemini: {err_msg}")
+            print(f"ข้อผิดพลาดจาก Gemini: {e}")
             
-        wait_time = (attempt + 1) * 3
-        print(f"รอ {wait_time} วินาที ก่อนลองใหม่...")
-        time.sleep(wait_time)
+        time.sleep(3)
                 
     print("Gemini API ไม่พร้อมใช้งาน สลับไปใช้ Fallback Extractor...")
     return None
@@ -133,7 +160,7 @@ if __name__ == "__main__":
         if text_content:
             summary = summarize_with_gemini(text_content)
             if not summary:
-                summary = fallback_parse_content(text_content, html_content)
+                summary = fallback_parse_content(text_content)
             
             send_line_message(summary)
             print("ทำงานสำเร็จ!")
