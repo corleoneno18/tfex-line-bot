@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from bs4 import BeautifulSoup
 from google import genai
@@ -27,11 +28,22 @@ def summarize_with_gemini(raw_data):
     {raw_data}
     """
     
-    response = client.models.generate_content(
-        model="gemini-3.8-flash",
-        contents=prompt
-    )
-    return response.text
+    # ระบบ Retry อัตโนมัติ ป้องกันปัญหา Server 503 แน่นชั่วคราว
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            print(f"กำลังเรียก Gemini API (ครั้งที่ {attempt + 1})...")
+            response = client.models.generate_content(
+                model="gemini-3.8-flash",
+                contents=prompt
+            )
+            return response.text
+        except Exception as e:
+            if "503" in str(e) and attempt < max_retries - 1:
+                print("เซิร์ฟเวอร์หนาแน่น (503) กำลังลองใหม่อีกครั้งใน 3 วินาที...")
+                time.sleep(3)
+            else:
+                raise e
 
 def send_line_message(message):
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
