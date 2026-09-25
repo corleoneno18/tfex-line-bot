@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import requests
 from google import genai
@@ -18,11 +19,9 @@ def get_tfex_data_via_playwright():
         
         try:
             page.goto(url, wait_until="networkidle", timeout=30000)
-            # รอให้ตารางราคาดึงข้อมูลมาแสดงสำเร็จ
             page.wait_for_selector("table", timeout=15000)
-            time.sleep(3) # รอข้อมูลในตาราง Render ครบ
+            time.sleep(3)
             
-            # ดึงข้อความทั้งหมดในตารางหรือส่วนเนื้อหาหลัก
             content = page.locator("body").inner_text()
             browser.close()
             print("ดึงข้อมูลจากหน้าเว็บสำเร็จ!")
@@ -31,6 +30,41 @@ def get_tfex_data_via_playwright():
             print(f"เกิดข้อผิดพลาดในการดึงหน้าเว็บ: {e}")
             browser.close()
             return None
+
+def fallback_parse_text(raw_text):
+    """ฟังก์ชันสกัดข้อมูลด้วย Regex กรณี Gemini API ไม่พร้อมใช้งาน"""
+    print("สลับมาใช้ระบบ Direct Regex Extractor...")
+    pattern = r'(S50[A-Z0-9]+)\s+([\d\.\-]+)\s+([\d\.\-]+)\s+([\d\.\-]+%?)\s+([\d\.\-]+)\s+([\d\.\-]+)\s+([\d\.\-]+)\s+([\d\.\-]+)\s+([\d,]+)\s+([\d,]+)'
+    matches = re.findall(pattern, raw_text)
+    
+    if not matches:
+        # หากค้นหาแพทเทิร์นตารางแบบละเอียดไม่เจอ ให้ส่งข้อความแจ้งเตือนพร้อมข้อมูลบางส่วน
+        return "ไม่สามารถประมวลผลรูปแบบตารางได้ในขณะนี้"
+        
+    lines = []
+    total_vol = 0
+    total_oi = 0
+    
+    for m in matches:
+        symbol, last, chg, pct, open_p, high, low, avg_p, vol, oi = m
+        vol_num = int(vol.replace(',', '')) if vol.replace(',', '').isdigit() else 0
+        oi_num = int(oi.replace(',', '')) if oi.replace(',', '').isdigit() else 0
+        total_vol += vol_num
+        total_oi += oi_num
+        
+        lines.append(
+            f"📌 [{symbol}]\n"
+            f"• ราคาล่าสุด: {last}\n"
+            f"• เปลี่ยนแปลง: {chg} ({pct})\n"
+            f"• สูงสุด / ต่ำสุด: {high} / {low}\n"
+            f"• ราคาเปิด / เฉลี่ย: {open_p} / {avg_p}\n"
+            f"• ปริมาณ (สัญญา): {vol}\n"
+            f"• สถานะคงค้าง (OI): {oi}\n"
+        )
+        
+    summary_text = "\n".join(lines)
+    summary_text += f"\n📊 **รวม SET50 Futures**\n• ปริมาณรวม: {total_vol:,} สัญญา\n• สถานะคงค้างรวม: {total_oi:,} สัญญา"
+    return summary_text
 
 def summarize_with_gemini(raw_text):
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -67,14 +101,15 @@ def summarize_with_gemini(raw_text):
         except Exception as e:
             err_msg = str(e)
             if "503" in err_msg or "UNAVAILABLE" in err_msg:
-                wait_time = (attempt + 1) * 4
+                wait_time = (attempt + 1) * 5
                 print(f"เซิร์ฟเวอร์หนาแน่น (503) รอ {wait_time} วินาที...")
                 time.sleep(wait_time)
             else:
                 print(f"เกิดข้อผิดพลาดกับ Gemini: {err_msg}")
                 break
                 
-    raise Exception("Gemini API ไม่สามารถประมวลผลได้ในขณะนี้")
+    print("Gemini API ไม่พร้อมใช้งาน สลับไปใช้ Fallback Extractor...")
+    return fallback_parse_text(raw_text)
 
 def send_line_message(message):
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
