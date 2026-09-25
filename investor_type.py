@@ -5,7 +5,7 @@ import requests
 from playwright.sync_api import sync_playwright
 
 def fetch_investor_type_data(page):
-    """ดึงข้อมูลสรุปประเภทนักลงทุน TFEX โดยใช้การค้นหาข้อความจากทั้งหน้าเว็บ"""
+    """ดึงข้อมูลสรุปประเภทนักลงทุน TFEX"""
     tfex_data = {
         "นักลงทุนสถาบัน": {},
         "นักลงทุนต่างชาติ": {},
@@ -14,8 +14,12 @@ def fetch_investor_type_data(page):
 
     print("กำลังดึงข้อมูลประเภทนักลงทุน TFEX...")
     try:
-        page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="networkidle", timeout=45000)
-        time.sleep(5)  # รอให้ JavaScript โหลดข้อมูลลงตารางเสร็จสิ้น
+        # ใช้ domcontentloaded เพื่อไม่ให้ติด Timeout จาก networkidle
+        page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="domcontentloaded", timeout=30000)
+        
+        # เจาะจงรอให้ตารางแสดงผลขึ้นมาก่อน
+        page.wait_for_selector("table", timeout=15000)
+        time.sleep(3) # รอให้ตัวเลขในตารางโหลดเสร็จสมบูรณ์
         
         # ดึงข้อความทั้งหมดในหน้ามาวิเคราะห์
         text_content = page.locator("body").inner_text()
@@ -28,12 +32,11 @@ def fetch_investor_type_data(page):
             "Equity Index Put Options"
         ]
 
-        # อ่านข้อมูลแยกตามบรรทัดที่มีชื่อสินค้า
         lines = text_content.split('\n')
         for line in lines:
             for cat in categories:
                 if cat in line:
-                    # ค้นหาตัวเลขที่มีเครื่องหมาย +/- หรือตัวเลขปกติ เช่น +28,716 หรือ -372
+                    # ค้นหาตัวเลขที่มีเครื่องหมาย +/- หรือตัวเลขปกติ
                     nums = re.findall(r'[-+]?\d{1,3}(?:,\d{3})*', line)
                     if len(nums) >= 3:
                         tfex_data["นักลงทุนสถาบัน"][cat] = nums[0]
