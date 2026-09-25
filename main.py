@@ -6,7 +6,7 @@ from google import genai
 from playwright.sync_api import sync_playwright
 
 def get_tfex_data_via_playwright():
-    """เปิดหน้าเว็บ Settrade ผ่าน Playwright เพื่อดึงทั้ง innerText และ HTML"""
+    """เปิดหน้าเว็บ Settrade ผ่าน Playwright เพื่อดึงข้อความตาราง"""
     url = "https://www.settrade.com/th/derivatives/market-data/trading-quotation-by-series"
     print("กำลังเปิดเบราว์เซอร์เพื่อดึงข้อมูลตาราง TFEX...")
     
@@ -21,71 +21,46 @@ def get_tfex_data_via_playwright():
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
             print("กำลังรอโหลดตารางราคา...")
             page.wait_for_selector("table", timeout=30000)
-            time.sleep(5)  # รอให้ข้อมูลตัวเลข Render ครบ
+            time.sleep(5)  # รอให้ข้อมูล Render ครบถ้วน
             
             text_content = page.locator("body").inner_text()
-            html_content = page.content()
             browser.close()
             print("ดึงข้อมูลจากหน้าเว็บสำเร็จ!")
-            return text_content, html_content
+            return text_content
         except Exception as e:
             print(f"เกิดข้อผิดพลาดในการดึงหน้าเว็บ: {e}")
             browser.close()
-            return None, None
+            return None
 
 def fallback_parse_content(text_content):
-    """สกัดข้อมูลตาราง Settrade TFEX ปรับให้ดึงราคาเปิด (Open Price) แทนราคาเฉลี่ย"""
-    print("สลับมาใช้ระบบ Fallback Regex Extractor (ปรับใช้ราคาเปิด)...")
+    """สกัดข้อมูลตารางกรณี Gemini API ไม่พร้อมใช้งาน พร้อมแสดงป้ายกำกับครบถ้วน"""
+    print("สลับมาใช้ระบบ Fallback Regex Extractor...")
     
-    # Pattern จับแถวตาราง Settrade TFEX: [Symbol] [Month/Year] [Last] [Chg] [%Chg] [Open] [High] [Low] [Vol] [OI]
-    pattern = r'(S50[A-Z0-9]+)\s+([ก-ฮa-zA-Z\.\s\d]+?)\s+([\d\.\,\-]+)\s+([\+\-\d\.\,]+)\s+([\+\-\d\.\,%]+)\s+([\d\.\,\-]+)\s+([\d\.\,\-]+)\s+([\d\.\,\-]+)\s+([\d\,]+)\s+([\d\,]+)'
-    matches = re.findall(pattern, text_content)
-    
+    symbols = list(dict.fromkeys(re.findall(r'S50[A-Z0-9]+', text_content)))
     lines = []
-    total_vol = 0
-    total_oi = 0
     
-    if matches:
-        for m in matches:
-            sym, month, last, chg, pct, open_p, high, low, vol, oi = m
-            
-            # คำนวณผลรวม
-            v_num = int(vol.replace(',', '')) if vol.replace(',', '').isdigit() else 0
-            o_num = int(oi.replace(',', '')) if oi.replace(',', '').isdigit() else 0
-            total_vol += v_num
-            total_oi += o_num
-            
-            lines.append(
-                f"📌 **{sym}** ({month.strip()})\n"
-                f"• ราคาล่าสุด: {last}\n"
-                f"• เปลี่ยนแปลง: {chg} ({pct})\n"
-                f"• ราคาเปิด: {open_p}\n"
-                f"• ราคาสูงสุด / ต่ำสุด: {high} / {low}\n"
-                f"• ปริมาณซื้อขาย: {vol} สัญญา\n"
-                f"• สถานะคงค้าง (OI): {oi} สัญญา"
-            )
-    else:
-        # หากค้นหาแพทเทิร์นตารางแบบละเอียดไม่เจอ ให้ใช้ Regex ค้นหาตัวเลขเบื้องต้น
-        symbols = list(dict.fromkeys(re.findall(r'S50[A-Z0-9]+', text_content)))
-        for sym in symbols:
-            match = re.search(re.escape(sym) + r'[\s\S]{1,120}', text_content)
-            if match:
-                raw_line = match.group(0).replace('\n', ' ')
-                tokens = raw_line.split()
-                if len(tokens) >= 9:
-                    lines.append(
-                        f"📌 **{sym}**\n"
-                        f"• ราคาล่าสุด: {tokens[3] if len(tokens)>3 else '-'}\n"
-                        f"• เปลี่ยนแปลง: {tokens[4] if len(tokens)>4 else '-'} ({tokens[5] if len(tokens)>5 else '-'})\n"
-                        f"• ราคาเปิด: {tokens[6] if len(tokens)>6 else '-'}\n"
-                        f"• ราคาสูงสุด / ต่ำสุด: {tokens[7] if len(tokens)>7 else '-'} / {tokens[8] if len(tokens)>8 else '-'}"
-                    )
+    for sym in symbols:
+        match = re.search(re.escape(sym) + r'[\s\S]{1,150}', text_content)
+        if match:
+            raw_text = match.group(0).replace('\n', ' ')
+            tokens = raw_text.split()
+            # ค้นหาตัวเลขในแถวเพื่อจัดเรียง
+            nums = [t for t in tokens if re.match(r'^[\+\-\d\.\,]+%?$', t)]
+            if len(nums) >= 6:
+                lines.append(
+                    f"📌 **[{sym}]**\n"
+                    f"• ราคาล่าสุด / ล่าสุด: {nums[0]}\n"
+                    f"• เปลี่ยนแปลง: {nums[1]} ({nums[2] if len(nums)>2 else '-'})\n"
+                    f"• ราคาเปิด: {nums[3] if len(nums)>3 else '-'}\n"
+                    f"• ราคาสูงสุด: {nums[4] if len(nums)>4 else '-'}\n"
+                    f"• ราคาต่ำสุด: {nums[5] if len(nums)>5 else '-'}\n"
+                    f"• ราคาปิด (Prior/Settlement): {nums[0]}\n"
+                    f"• ปริมาณซื้อขาย: {nums[-2] if len(nums)>6 else '-'} สัญญา\n"
+                    f"• สถานะคงค้าง (OI): {nums[-1] if len(nums)>7 else '-'} สัญญา"
+                )
 
     if lines:
-        summary_text = "\n\n".join(lines)
-        if total_vol > 0 or total_oi > 0:
-            summary_text += f"\n\n📊 **สรุปรวม SET50 Futures ทั้งหมด**\n• ปริมาณการซื้อขายรวม: {total_vol:,} สัญญา\n• สถานะคงค้างรวม (OI): {total_oi:,} สัญญา"
-        return summary_text
+        return "\n\n".join(lines)
 
     return "ระบบไม่สามารถจัดรูปแบบตารางได้ กรุณาตรวจสอบหน้าเว็บ Settrade อีกครั้ง"
 
@@ -94,18 +69,21 @@ def summarize_with_gemini(raw_text):
     client = genai.Client(api_key=api_key)
     
     prompt = f"""
-    จากข้อความหน้าเว็บ Settrade TFEX ด้านล่างนี้ ให้สกัดข้อมูลตารางราคาของ SET50 Futures ทุก Series ทั้งหมดที่มี (เช่น S50U26, S50Z26, S50H27 ฯลฯ)
-    แล้วจัดรูปแบบสรุปเป็นข้อความอ่านง่ายสำหรับส่งเข้า LINE ดังนี้:
+    จากข้อความหน้าเว็บ Settrade TFEX ด้านล่างนี้ ให้สกัดและคำนวณ/หาข้อมูลของ SET50 Futures ทุก Series ทั้งหมดที่มี (เช่น S50U26, S50Z26, S50H27 ฯลฯ)
+    ต้องแสดงค่าตัวเลขให้ครบถ้วนทุกหัวข้อ หากค่าใดไม่มีในตาราง ให้คำนวณจากข้อมูลที่มี หรือระบุราคาชำระราคา/ราคาปิดก่อนหน้า (Settlement Price) แทน
+    
+    จัดรูปแบบสรุปเป็นข้อความสำหรับส่งเข้า LINE ดังนี้:
 
     📌 **[ชื่อย่อสัญญา]**
-    • ราคาล่าสุด: 
-    • เปลี่ยนแปลง: (พร้อม %)
     • ราคาเปิด: 
-    • ราคาสูงสุด / ต่ำสุด: 
-    • ปริมาณ (สัญญา): 
-    • สถานะคงค้าง (OI): 
+    • ราคาสูงสุด: 
+    • ราคาต่ำสุด: 
+    • ราคาปิด / ราคาล่าสุด: 
+    • ราคาเฉลี่ย: (หากไม่มีในตารางให้ใช้คำนวณจาก (สูง+ต่ำ)/2 หรือใส่ราคาเฉลี่ยการซื้อขาย)
+    • ปริมาณซื้อขาย: (สัญญา)
+    • สถานะคงค้าง (OI): (สัญญา)
 
-    พร้อมสรุปผลรวม ปริมาณสัญญา และ สถานะคงค้าง ทั้งหมดท้ายข้อความด้วย
+    พร้อมสรุปผลรวม ปริมาณการซื้อขายรวม และ สถานะคงค้างรวม ทั้งหมดท้ายข้อความด้วย
 
     ข้อมูลจากหน้าเว็บ:
     {raw_text[:15000]}
@@ -156,7 +134,7 @@ def send_line_message(message):
 
 if __name__ == "__main__":
     try:
-        text_content, html_content = get_tfex_data_via_playwright()
+        text_content = get_tfex_data_via_playwright()
         if text_content:
             summary = summarize_with_gemini(text_content)
             if not summary:
