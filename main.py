@@ -13,9 +13,7 @@ MONTH_MAP = {
 }
 
 def get_last_trading_day(symbol):
-    """
-    คำนวณวันทำการก่อนวันสุดท้ายของเดือน จากชื่อสัญญา (เช่น S50U26, S50M27)
-    """
+    """คำนวณวันทำการก่อนวันสุดท้ายของเดือน จากชื่อสัญญา"""
     match = re.match(r'S50([A-Z])(\d{2})', symbol)
     if not match:
         return None
@@ -27,15 +25,12 @@ def get_last_trading_day(symbol):
     
     year = 2000 + int(year_code)
     
-    # หาวันที่สุดท้ายของเดือน
     _, last_day = calendar.monthrange(year, month)
     dt = datetime(year, month, last_day)
     
-    # หาวันทำการสุดท้าย (ถ้าเป็น ส.-อา. ให้ถอยกลับมาวันศุกร์)
     while dt.weekday() >= 5: # 5 = เสาร์, 6 = อาทิตย์
         dt -= timedelta(days=1)
         
-    # ถอยลงมาอีก 1 วันทำการ เพื่อให้เป็น "วันทำการก่อนวันสุดท้าย"
     dt -= timedelta(days=1)
     while dt.weekday() >= 5:
         dt -= timedelta(days=1)
@@ -43,7 +38,7 @@ def get_last_trading_day(symbol):
     return dt
 
 def calculate_remaining_days(symbol):
-    """คำนวณจำนวนวันคงเหลือจากวันปัจจุบัน ไปจนถึงวันทำการก่อนวันสุดท้าย"""
+    """คำนวณจำนวนวันคงเหลือ"""
     last_trade_dt = get_last_trading_day(symbol)
     if not last_trade_dt:
         return "-"
@@ -117,7 +112,7 @@ def get_symbol_overview_data(page, symbol):
         return None
 
 def fetch_investor_type_data(page):
-    """3. ดึงข้อมูลประเภทนักลงทุนทั้งจาก SET และ TFEX (ปรับแก้เพื่อป้องกัน Timeout)"""
+    """3. ดึงข้อมูลประเภทนักลงทุนอย่างแม่นยำ"""
     print("กำลังดึงข้อมูลประเภทนักลงทุน SET & TFEX...")
     
     set_data = {}
@@ -136,12 +131,20 @@ def fetch_investor_type_data(page):
         
         rows = page.locator("table tbody tr").all()
         for row in rows:
-            text = row.inner_text()
-            cols = [c.strip() for c in text.split("\t") if c.strip()]
-            if len(cols) >= 4:
-                inv_type = cols[0]
-                net_val = cols[3]
-                set_data[inv_type] = net_val
+            text = row.inner_text().strip()
+            lines = [line.strip() for line in text.split("\n") if line.strip()]
+            if len(lines) >= 4:
+                inv_type = lines[0]
+                net_val = lines[-1]  # ช่องสุทธิ
+                
+                if "ต่างชาติ" in inv_type:
+                    set_data["นักลงทุนต่างชาติ"] = net_val
+                elif "สถาบัน" in inv_type:
+                    set_data["นักลงทุนสถาบัน"] = net_val
+                elif "บัญชีบริษัทหลักทรัพย์" in inv_type or "บัญชี บล." in inv_type:
+                    set_data["บัญชีบริษัทหลักทรัพย์"] = net_val
+                elif "รายย่อย" in inv_type or "ในประเทศ" in inv_type:
+                    set_data["นักลงทุนภายในประเทศ"] = net_val
     except Exception as e:
         print(f"ข้อผิดพลาดขณะดึงข้อมูล SET: {e}")
 
@@ -159,22 +162,36 @@ def fetch_investor_type_data(page):
             "Equity Index Put Options"
         ]
         
-        tables = page.locator("table").all()
-        groups_list = ["นักลงทุนต่างชาติ", "นักลงทุนสถาบัน", "บัญชีบริษัทหลักทรัพย์", "นักลงทุนภายในประเทศ"]
-        
-        for idx, table in enumerate(tables):
-            t_text = table.inner_text()
-            # ระบุกลุ่มนักลงทุนตามลำดับตารางที่พบ
-            group_key = groups_list[idx] if idx < len(groups_list) else None
-            if not group_key:
-                continue
-                
-            for line in t_text.split("\n"):
-                for cat in categories:
-                    if cat in line:
-                        parts = re.split(r'\s+', line.strip())
-                        if len(parts) >= 4:
-                            tfex_data[group_key][cat] = parts[-1]
+        # ค้นหาปุ่ม Tab บนหน้าเว็บ TFEX และกดคลิกทีละ Tab
+        tabs = [
+            ("นักลงทุนต่างชาติ", ["ต่างชาติ", "Foreign"]),
+            ("นักลงทุนสถาบัน", ["สถาบัน", "Institutional"]),
+            ("นักลงทุนภายในประเทศ", ["ในประเทศ", "Retail", "Individual"])
+        ]
+
+        for group_key, keywords in tabs:
+            # ค้นหาและคลิก Tab
+            for kw in keywords:
+                tab_btn = page.locator(f"button:has-text('{kw}'), a:has-text('{kw}'), li:has-text('{kw}')").first
+                if tab_btn.is_visible():
+                    tab_btn.click()
+                    time.sleep(1)
+                    break
+
+            # แกะตารางที่แสดงผลในขณะนั้น
+            body_text = page.locator("body").inner_text()
+            for cat in categories:
+                pattern = rf"{cat}\s+[\d\,\.-]+\s+[\d\,\.-]+\s+([\+\-]?[\d\,\.]+)"
+                match = re.search(pattern, body_text)
+                if match:
+                    tfex_data[group_key][cat] = match.group(1)
+                else:
+                    # ค้นหาแบบสแกนบรรทัด
+                    for line in body_text.split("\n"):
+                        if cat in line:
+                            parts = re.split(r'\s+', line.strip())
+                            if len(parts) >= 2:
+                                tfex_data[group_key][cat] = parts[-1]
     except Exception as e:
         print(f"ข้อผิดพลาดขณะดึงข้อมูล TFEX: {e}")
 
@@ -183,27 +200,23 @@ def fetch_investor_type_data(page):
 def format_investor_summary(set_data, tfex_data):
     """4. จัดฟอร์แมตสรุปประเภทนักลงทุนพร้อม Emoji"""
     groups = [
-        ("🌐 **นักลงทุนต่างชาติ**", "นักลงทุนต่างชาติ", "สถาบันต่างประเทศ"),
-        ("🏦 **นักลงทุนสถาบัน**", "นักลงทุนสถาบัน", "นักลงทุนสถาบันในประเทศ"),
-        ("💼 **บัญชีบริษัทหลักทรัพย์**", "บัญชีบริษัทหลักทรัพย์", "บัญชีบริษัทหลักทรัพย์"),
-        ("👤 **นักลงทุนภายในประเทศ**", "นักลงทุนภายในประเทศ", "นักลงทุนรายย่อยในประเทศ")
+        ("🌐 **นักลงทุนต่างชาติ**", "นักลงทุนต่างชาติ"),
+        ("🏦 **นักลงทุนสถาบัน**", "นักลงทุนสถาบัน"),
+        ("💼 **บัญชีบริษัทหลักทรัพย์**", "บัญชีบริษัทหลักทรัพย์"),
+        ("👤 **นักลงทุนภายในประเทศ**", "นักลงทุนภายในประเทศ")
     ]
     
     output = []
     
-    for title, tfex_key, set_key in groups:
+    for title, group_key in groups:
         lines = [title]
         
         # ยอด SET (Equity Index)
-        set_net = "-"
-        for k, v in set_data.items():
-            if set_key in k or tfex_key in k:
-                set_net = v
-                break
+        set_net = set_data.get(group_key, "-")
         lines.append(f"• Equity Index: {set_net}")
         
         # ยอด TFEX รายสินค้า
-        tfex_group = tfex_data.get(tfex_key, {})
+        tfex_group = tfex_data.get(group_key, {})
         for cat in ["Equity Index Futures", "Single Stock Futures", "Currency Futures", "Equity Index Call Options", "Equity Index Put Options"]:
             val = tfex_group.get(cat, "-")
             lines.append(f"• {cat}: {val}")
@@ -243,10 +256,8 @@ def fetch_all_data():
 
 def format_line_message(results, total_vol, total_oi, set_data, tfex_data):
     """6. รวมข้อความทั้งหมดเข้าด้วยกัน"""
-    # ส่วนที่ 1: สรุปประเภทนักลงทุน
     investor_summary = format_investor_summary(set_data, tfex_data)
     
-    # ส่วนที่ 2: สรุปสัญญา SET50 Futures
     results_sorted = sorted(results, key=lambda x: x["oi_num"], reverse=True)
     lines = []
     for item in results_sorted:
