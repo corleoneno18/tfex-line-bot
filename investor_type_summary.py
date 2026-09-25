@@ -19,19 +19,17 @@ def format_number_with_sign(val_str):
         return val_str
 
 def fetch_investor_type_data(page):
-    """ดึงข้อมูลประเภทนักลงทุนเฉพาะ TFEX"""
+    """ดึงยอดสุทธิประเภทนักลงทุน TFEX จากตาราง Settrade"""
     tfex_data = {
         "นักลงทุนต่างชาติ": {},
         "นักลงทุนสถาบัน": {},
-        "นักลงทุนภายในประเทศ": {},
-        "บัญชีบริษัทหลักทรัพย์": {}
+        "นักลงทุนภายในประเทศ": {}
     }
 
     print("กำลังดึงข้อมูลประเภทนักลงทุน TFEX...")
     try:
-        page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="domcontentloaded", timeout=30000)
-        page.evaluate("window.scrollBy(0, 300)")
-        time.sleep(5)
+        page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="networkidle", timeout=30000)
+        time.sleep(3)
         
         rows = page.locator("table tbody tr").all()
         for r in rows:
@@ -48,16 +46,15 @@ def fetch_investor_type_data(page):
             
             for cat in categories:
                 if cat in cleaned_text:
+                    # ในตาราง TFEX แต่ละแถวจะมี 9 ตัวเลข:
+                    # [0]: สถาบัน ซื้อ, [1]: สถาบัน ขาย, [2]: สถาบัน สุทธิ
+                    # [3]: ต่างชาติ ซื้อ, [4]: ต่างชาติ ขาย, [5]: ต่างชาติ สุทธิ
+                    # [6]: ในประเทศ ซื้อ, [7]: ในประเทศ ขาย, [8]: ในประเทศ สุทธิ
                     nums = re.findall(r'[-+]?\d{1,3}(?:,\d{3})*|-', cleaned_text)
-                    if len(nums) >= 4:
-                        tfex_data["นักลงทุนสถาบัน"][cat] = format_number_with_sign(nums[0])
-                        tfex_data["บัญชีบริษัทหลักทรัพย์"][cat] = format_number_with_sign(nums[1])
-                        tfex_data["นักลงทุนต่างชาติ"][cat] = format_number_with_sign(nums[2])
-                        tfex_data["นักลงทุนภายในประเทศ"][cat] = format_number_with_sign(nums[3])
-                    elif len(nums) == 3:
-                        tfex_data["นักลงทุนสถาบัน"][cat] = format_number_with_sign(nums[0])
-                        tfex_data["นักลงทุนต่างชาติ"][cat] = format_number_with_sign(nums[1])
-                        tfex_data["นักลงทุนภายในประเทศ"][cat] = format_number_with_sign(nums[2])
+                    if len(nums) >= 9:
+                        tfex_data["นักลงทุนสถาบัน"][cat] = format_number_with_sign(nums[2])
+                        tfex_data["นักลงทุนต่างชาติ"][cat] = format_number_with_sign(nums[5])
+                        tfex_data["นักลงทุนภายในประเทศ"][cat] = format_number_with_sign(nums[8])
 
     except Exception as e:
         print(f"Error TFEX Investor Type: {e}")
@@ -65,12 +62,11 @@ def fetch_investor_type_data(page):
     return tfex_data
 
 def format_investor_message(tfex_data):
-    """จัดรูปแบบข้อความ TFEX แยกตามประเภทนักลงทุน"""
+    """จัดรูปแบบข้อความ TFEX แยกตามประเภทนักลงทุน (3 กลุ่มหลัก)"""
     groups = [
         ("🌐 **นักลงทุนต่างชาติ**", "นักลงทุนต่างชาติ"),
         ("🏦 **นักลงทุนสถาบัน**", "นักลงทุนสถาบัน"),
-        ("👤 **นักลงทุนภายในประเทศ**", "นักลงทุนภายในประเทศ"),
-        ("💼 **บัญชีบริษัทหลักทรัพย์**", "บัญชีบริษัทหลักทรัพย์")
+        ("👤 **นักลงทุนภายในประเทศ**", "นักลงทุนภายในประเทศ")
     ]
     
     categories = [
