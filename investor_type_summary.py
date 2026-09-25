@@ -8,7 +8,6 @@ def format_number_with_sign(val_str):
     """แปลงตัวเลขให้มีเครื่องหมาย + นำหน้าหากเป็นค่าบวก"""
     if not val_str or val_str == "-":
         return "-"
-    # ตัดเครื่องหมาย + เดิมออกก่อนเพื่อนำมาวิเคราะห์
     clean_val = val_str.replace("+", "").replace(",", "").strip()
     try:
         num = int(clean_val)
@@ -20,18 +19,17 @@ def format_number_with_sign(val_str):
         return val_str
 
 def fetch_investor_type_data(page):
-    """ดึงข้อมูลประเภทนักลงทุน TFEX จากตารางบนเว็บ Settrade"""
+    """ดึงข้อมูลประเภทนักลงทุนเฉพาะ TFEX"""
     tfex_data = {
-        "นักลงทุนสถาบัน": {},
         "นักลงทุนต่างชาติ": {},
-        "นักลงทุนภายในประเทศ": {}
+        "นักลงทุนสถาบัน": {},
+        "นักลงทุนภายในประเทศ": {},
+        "บัญชีบริษัทหลักทรัพย์": {}
     }
 
     print("กำลังดึงข้อมูลประเภทนักลงทุน TFEX...")
     try:
         page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="domcontentloaded", timeout=30000)
-        
-        # เลื่อนหน้าจอลงมาเพื่อให้คอมโพเนนต์เริ่มโหลด
         page.evaluate("window.scrollBy(0, 300)")
         time.sleep(5)
         
@@ -50,9 +48,13 @@ def fetch_investor_type_data(page):
             
             for cat in categories:
                 if cat in cleaned_text:
-                    nums = re.findall(r'[-+]?\d{1,3}(?:,\d{3})*', cleaned_text)
-                    if len(nums) >= 3:
-                        # ใส่ฟังก์ชันจัดรูปแบบเครื่องหมาย + / - ให้ครบทุกกลุ่ม
+                    nums = re.findall(r'[-+]?\d{1,3}(?:,\d{3})*|-', cleaned_text)
+                    if len(nums) >= 4:
+                        tfex_data["นักลงทุนสถาบัน"][cat] = format_number_with_sign(nums[0])
+                        tfex_data["บัญชีบริษัทหลักทรัพย์"][cat] = format_number_with_sign(nums[1])
+                        tfex_data["นักลงทุนต่างชาติ"][cat] = format_number_with_sign(nums[2])
+                        tfex_data["นักลงทุนภายในประเทศ"][cat] = format_number_with_sign(nums[3])
+                    elif len(nums) == 3:
                         tfex_data["นักลงทุนสถาบัน"][cat] = format_number_with_sign(nums[0])
                         tfex_data["นักลงทุนต่างชาติ"][cat] = format_number_with_sign(nums[1])
                         tfex_data["นักลงทุนภายในประเทศ"][cat] = format_number_with_sign(nums[2])
@@ -63,11 +65,12 @@ def fetch_investor_type_data(page):
     return tfex_data
 
 def format_investor_message(tfex_data):
-    """จัดรูปแบบข้อความ แสดงเฉพาะ ต่างชาติ, สถาบัน, และในประเทศ"""
+    """จัดรูปแบบข้อความ TFEX แยกตามประเภทนักลงทุน"""
     groups = [
         ("🌐 **นักลงทุนต่างชาติ**", "นักลงทุนต่างชาติ"),
         ("🏦 **นักลงทุนสถาบัน**", "นักลงทุนสถาบัน"),
-        ("👤 **นักลงทุนภายในประเทศ**", "นักลงทุนภายในประเทศ")
+        ("👤 **นักลงทุนภายในประเทศ**", "นักลงทุนภายในประเทศ"),
+        ("💼 **บัญชีบริษัทหลักทรัพย์**", "บัญชีบริษัทหลักทรัพย์")
     ]
     
     categories = [
@@ -87,10 +90,9 @@ def format_investor_message(tfex_data):
             lines.append(f"• {cat}: {val}")
         investor_lines.append("\n".join(lines))
         
-    return "👥 **สรุปมูลค่าการซื้อขายตามประเภทนักลงทุน**\n\n" + "\n\n".join(investor_lines)
+    return "👥 **สรุปมูลค่าการซื้อขายตามประเภทนักลงทุน (TFEX)**\n\n" + "\n\n".join(investor_lines)
 
 def send_line_message(message):
-    """ส่งข้อความเข้า LINE"""
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
     user_id = os.environ.get("LINE_USER_ID")
     url = "https://api.line.me/v2/bot/message/push"
@@ -119,4 +121,4 @@ if __name__ == "__main__":
         browser.close()
 
         send_line_message(msg)
-        print("ส่งสรุปประเภทนักลงทุนเข้า LINE สำเร็จ!")
+        print("ส่งสรุปประเภทนักลงทุน TFEX เข้า LINE สำเร็จ!")
