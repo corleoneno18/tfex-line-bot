@@ -3,7 +3,6 @@ import re
 import time
 import requests
 from datetime import datetime
-from google import genai
 from playwright.sync_api import sync_playwright
 
 def get_all_s50_symbols(page):
@@ -19,10 +18,9 @@ def get_all_s50_symbols(page):
     print(f"พบสัญญา SET50 ทั้งหมด {len(symbols)} รายการ: {symbols}")
     return symbols
 
-def parse_thai_month_year(expiry_text):
+def parse_thai_expiry_date(expiry_text):
     """
-    แปลงข้อความเช่น 'ก.ย. 2569' หรือ '29 ก.ย. 2569' ให้เป็นวันที่สุดท้ายของเดือนนั้นๆ
-    เพื่อใช้นับวันคงเหลืออย่างแม่นยำ
+    แปลงข้อความเฉพาะเดือน/ปี เช่น 'ก.ย. 2569' เป็น วันที่สุดท้ายของเดือนนั้น
     """
     thai_months = {
         "ม.ค.": (1, 31), "ก.พ.": (2, 28), "มี.ค.": (3, 31), "เม.ย.": (4, 30),
@@ -30,29 +28,22 @@ def parse_thai_month_year(expiry_text):
         "ก.ย.": (9, 30), "ต.ค.": (10, 31), "พ.ย.": (11, 30), "ธ.ค.": (12, 31)
     }
     try:
-        # หากระบุวันด้วย เช่น '29 ก.ย. 2569'
-        m_day = re.search(r'(\d+)\s+([ก-ฮ\.]+)\s+(\d{4})', expiry_text)
-        if m_day:
-            d = int(m_day.group(1))
-            m = thai_months.get(m_day.group(2), (1, 31))[0]
-            y = int(m_day.group(3)) - 543
-            return datetime(y, m, d)
-
-        # หากระบุเป็นเดือน เช่น 'ก.ย. 2569'
-        m_m = re.search(r'([ก-ฮ\.]+)\s+(\d{4})', expiry_text)
-        if m_m:
-            m_str = m_m.group(1)
-            y = int(m_m.group(2)) - 543
-            m_info = thai_months.get(m_str, (1, 30))
-            m = m_info[0]
-            d = m_info[1] # ใช้วันสุดท้ายของเดือนเป็นวันหมดอายุสัญญา
-            return datetime(y, m, d)
+        # ค้นหา 패턴 เดือน และ ปี พ.ศ. แบบเจาะจง (เช่น ก.ย. 2569)
+        m = re.search(r'([ก-ฮ\.]+)\s+(\d{4})', expiry_text)
+        if m:
+            m_str = m.group(1)
+            year_th = int(m.group(2))
+            year_ce = year_th - 543
+            
+            if m_str in thai_months:
+                month_num, last_day = thai_months[m_str]
+                return datetime(year_ce, month_num, last_day), f"{m_str} {year_th}"
     except Exception as e:
         print(f"เกิดข้อผิดพลาดในการแปลงวันที่ ({expiry_text}): {e}")
-    return None
+    return None, expiry_text
 
 def get_symbol_overview_data(page, symbol):
-    """2. เข้าหน้า Overview ของแต่ละสัญญาเพื่อแกะค่าตัวเลขและวันหมดอายุ"""
+    """2. เข้าหน้า Overview ของแต่ละสัญญาเพื่อแกะค่าตัวเลขและวันหมดอายุอย่างแม่นยำ"""
     quote_url = f"https://www.settrade.com/th/derivatives/quote/{symbol}/overview"
     print(f"กำลังดึงข้อมูลหน้า Overview ของ {symbol}...")
     
@@ -66,7 +57,7 @@ def get_symbol_overview_data(page, symbol):
             m = re.search(pattern, text)
             return m.group(1).strip() if m else default
 
-        # แกะค่าตัวเลขจากโครงสร้างข้อความหน้า Overview
+        # แกะค่าตัวเลขราคาและปริมาณ
         last = extract_val(r'([0-9\,\.]+)\s*[\+\-]\d+', body_text)
         change_pct = extract_val(r'([\+\-][0-9\,\.]+\s*\([\+\-][0-9\,\.]%\))', body_text)
         high = extract_val(r'ราคาสูงสุด\s*([0-9\,\.]+)', body_text)
@@ -76,15 +67,14 @@ def get_symbol_overview_data(page, symbol):
         vol = extract_val(r'ปริมาณ\s*\(สัญญา\)\s*([0-9\,]+)', body_text)
         oi = extract_val(r'สถานะคงค้าง\s*\(สัญญา\)\s*([0-9\,]+)', body_text)
         
-        # ดึงข้อความเดือนหมดอายุ / วันซื้อขายวันสุดท้าย (เช่น 'ก.ย. 2569')
-        expiry_info = extract_val(r'เดือนหมดอายุ:\s*([ก-ฮ\.\s\d]+)', body_text)
-        if expiry_info == "-":
-            expiry_info = extract_val(r'วันซื้อขายวันสุดท้าย\s*([\d\s[ก-ฮ\.]+\d+)', body_text)
-            
+        # ดึงข้อความเดือนหมดอายุแบบระบุเจาะจงเฉพาะ 패턴 'เดือนหมดอายุ: [ชื่อเดือน] [ปี]'
+        raw_expiry = extract_val(r'เดือนหมดอายุ:\s*([ก-ฮ\.]+\s+\d{4})', body_text)
+        
         # คำนวณวันคงเหลือ
         remaining_days_str = "-"
-        if expiry_info != "-":
-            expire_date = parse_thai_month_year(expiry_info)
+        clean_expiry_info = raw_expiry
+        if raw_expiry != "-":
+            expire_date, clean_expiry_info = parse_thai_expiry_date(raw_expiry)
             if expire_date:
                 today = datetime.now()
                 delta = (expire_date.date() - today.date()).days
@@ -95,7 +85,7 @@ def get_symbol_overview_data(page, symbol):
 
         return {
             "symbol": symbol,
-            "expiry_info": expiry_info,
+            "expiry_info": clean_expiry_info,
             "remaining_days": remaining_days_str,
             "last": last,
             "change_pct": change_pct,
