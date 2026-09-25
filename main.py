@@ -4,7 +4,7 @@ import requests
 from google import genai
 
 def get_tfex_data():
-    # ยิง API ตรงไปที่ Settrade เพื่อรับข้อมูลตารางราคา SET50 Futures
+    # ยิง API ตรงไปที่ Settrade เพื่อดึง JSON ข้อมูลตารางราคา
     url = "https://www.settrade.com/api/settrade/derivatives/market-data/trading-quotation-by-series?underlying=SET50"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -18,7 +18,6 @@ def get_tfex_data():
     except Exception as e:
         print(f"ดึงข้อมูล API ไม่สำเร็จ: {e}")
     
-    # หาก API ดึงไม่ได้ ให้ fallback ไปดึงหน้า html
     url_fallback = "https://www.settrade.com/th/derivatives/market-data/trading-quotation-by-series"
     res = requests.get(url_fallback, headers=headers)
     return res.text[:15000]
@@ -45,21 +44,31 @@ def summarize_with_gemini(raw_data):
     {raw_data}
     """
     
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            print(f"กำลังเรียก Gemini API (ครั้งที่ {attempt + 1})...")
-            response = client.models.generate_content(
-                model="gemini-3.8-flash",
-                contents=prompt
-            )
-            return response.text
-        except Exception as e:
-            if "503" in str(e) and attempt < max_retries - 1:
-                print("เซิร์ฟเวอร์หนาแน่น (503) กำลังลองใหม่อีกครั้งใน 3 วินาที...")
-                time.sleep(3)
-            else:
-                raise e
+    # รายชื่อโมเดลที่จะใช้ (ถ้าตัวแรกยุ่ง ให้สลับไปใช้ตัวถัดไปทันที)
+    models_to_try = ["gemini-3.8-flash", "gemini-2.5-flash"]
+    
+    for model_name in models_to_try:
+        print(f"--- กำลังทดลองใช้โมเดล: {model_name} ---")
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                print(f"เรียก Gemini API ({model_name}) ครั้งที่ {attempt + 1}...")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt
+                )
+                print(f"สำเร็จด้วยโมเดล: {model_name}")
+                return response.text
+            except Exception as e:
+                err_msg = str(e)
+                if "503" in err_msg or "UNAVAILABLE" in err_msg:
+                    print(f"เซิร์ฟเวอร์หนาแน่น (503) กำลังลองใหม่ใน 4 วินาที...")
+                    time.sleep(4)
+                else:
+                    print(f"เกิดข้อผิดพลาดกับ {model_name}: {err_msg}")
+                    break # ข้ามไปลองโมเดลถัดไป
+                    
+    raise Exception("ไม่สามารถดึงข้อมูลจาก Gemini API ได้เนื่องจากเซิร์ฟเวอร์หนาแน่นทุกโมเดล")
 
 def send_line_message(message):
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
