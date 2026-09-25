@@ -47,21 +47,18 @@ def calculate_remaining_days(symbol):
     return f"{delta} วัน"
 
 def fetch_set_investor_api():
-    """ดึงข้อมูลประเภทนักลงทุน SET จาก API ตรงของ Settrade เลี่ยงการโหลดตารางบนหน้าเว็บ"""
+    """ดึงข้อมูลประเภทนักลงทุน SET จาก API ตรง"""
     set_data = {
         "นักลงทุนสถาบัน": "-",
         "บัญชีบริษัทหลักทรัพย์": "-",
         "นักลงทุนต่างชาติ": "-",
         "นักลงทุนภายในประเทศ": "-"
     }
-    
-    # ยิงดึง API ตรงของ SET
     url = "https://api.settrade.com/api/set/market/investor-type"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Referer": "https://www.settrade.com/"
     }
-    
     try:
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
@@ -70,7 +67,6 @@ def fetch_set_investor_api():
             for item in items:
                 name = item.get("investorTypeName", "") or item.get("name", "")
                 net_val = item.get("netValue", item.get("net", "-"))
-                
                 if isinstance(net_val, (int, float)):
                     net_val = f"{net_val:,.2f}"
                 
@@ -82,16 +78,28 @@ def fetch_set_investor_api():
                     set_data["นักลงทุนต่างชาติ"] = net_val
                 elif "ในประเทศ" in name or "ทั่วไป" in name:
                     set_data["นักลงทุนภายในประเทศ"] = net_val
-            print(f"ดึงข้อมูล SET API สำเร็จ: {set_data}")
-        else:
-            print(f"SET API ตอบกลับด้วยสถานะ: {res.status_code}")
     except Exception as e:
-        print(f"ไม่สามารถเรียก SET API ได้: {e}")
+        print(f"SET API Error: {e}")
         
     return set_data
 
-def fetch_all_data_hybrid():
-    """ผสมการใช้ API (สำหรับ SET) และ Playwright (สำหรับ TFEX & SET50)"""
+def get_active_s50_symbols():
+    """สร้างรายชื่อสัญญา SET50 ของปีปัจจุบันและปีถัดไปโดยอัตโนมัติ (เป็นแผนสำรองชัวร์ๆ)"""
+    now = datetime.now()
+    curr_yr = str(now.year)[2:]
+    next_yr = str(now.year + 1)[2:]
+    
+    # สัญญาหลัก H, M, U, Z และสัญญารายเดือน
+    codes = ['H', 'M', 'U', 'Z', 'V', 'X', 'Z']
+    symbols = []
+    for c in ['U', 'V', 'X', 'Z', 'H', 'M']:
+        yr = curr_yr if c in ['U', 'V', 'X', 'Z'] else next_yr
+        symbols.append(f"S50{c}{yr}")
+    
+    # กำจัดค่าซ้ำ
+    return list(dict.fromkeys(symbols))
+
+def fetch_all_data_robust():
     from playwright.sync_api import sync_playwright
     
     set_data = fetch_set_investor_api()
@@ -108,24 +116,29 @@ def fetch_all_data_hybrid():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         )
         page = context.new_page()
 
-        # 1. ดึงสัญลักษณ์ SET50
+        # 1. พยายามดึงสัญลักษณ์จากหน้าเว็บ หากไม่ได้ให้ใช้ชุดสำรอง
+        symbols = []
         try:
-            page.goto("https://www.settrade.com/th/derivatives/market-data/trading-quotation-by-series", wait_until="domcontentloaded", timeout=30000)
+            page.goto("https://www.settrade.com/th/derivatives/market-data/trading-quotation-by-series", wait_until="domcontentloaded", timeout=15000)
             time.sleep(2)
             body = page.locator("body").inner_text()
-            symbols = list(dict.fromkeys(re.findall(r'S50[A-Z0-9]+', body)))
+            symbols = list(dict.fromkeys(re.findall(r'S50[A-Z0-9]{3}', body)))
         except Exception:
-            symbols = []
+            pass
+        
+        if not symbols:
+            symbols = get_active_s50_symbols()
+            print(f"ใช้สัญลักษณ์สำรอง: {symbols}")
 
         # 2. ดึงข้อมูลแต่ละสัญญา
         for sym in symbols:
             try:
-                page.goto(f"https://www.settrade.com/th/derivatives/quote/{sym}/overview", wait_until="domcontentloaded", timeout=20000)
-                time.sleep(1)
+                page.goto(f"https://www.settrade.com/th/derivatives/quote/{sym}/overview", wait_until="domcontentloaded", timeout=15000)
+                time.sleep(1.5)
                 text = page.locator("body").inner_text()
                 
                 def extract_val(pattern, default="-"):
@@ -145,19 +158,21 @@ def fetch_all_data_hybrid():
                 v_num = int(vol.replace(',', '')) if vol.replace(',', '').isdigit() else 0
                 o_num = int(oi.replace(',', '')) if oi.replace(',', '').isdigit() else 0
 
-                results.append({
-                    "symbol": sym, "remaining_days": rem, "last": last, "change_pct": change_pct,
-                    "high": high, "low": low, "avg": avg, "open": open_p, "vol": vol, "oi": oi,
-                    "vol_num": v_num, "oi_num": o_num
-                })
-                total_vol += v_num
-                total_oi += o_num
+                # เก็บเฉพาะสัญญาที่มีการซื้อขายหรือมี OI
+                if last != "-" or o_num > 0 or v_num > 0:
+                    results.append({
+                        "symbol": sym, "remaining_days": rem, "last": last, "change_pct": change_pct,
+                        "high": high, "low": low, "avg": avg, "open": open_p, "vol": vol, "oi": oi,
+                        "vol_num": v_num, "oi_num": o_num
+                    })
+                    total_vol += v_num
+                    total_oi += o_num
             except Exception as e:
                 print(f"ข้าม {sym}: {e}")
 
         # 3. ดึง TFEX
         try:
-            page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="domcontentloaded", timeout=30000)
+            page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="domcontentloaded", timeout=20000)
             time.sleep(3)
             cats = ["Equity Index Futures", "Single Stock Futures", "Currency Futures", "Equity Index Call Options", "Equity Index Put Options"]
             
@@ -214,8 +229,10 @@ def format_line_message(results, total_vol, total_oi, set_data, tfex_data):
             f"• ปริมาณ (สัญญา): {item['vol']}\n"
             f"• สถานะคงค้าง (OI): {item['oi']}"
         )
-    s50_summary = "\n\n".join(lines)
+    
+    s50_summary = "\n\n".join(lines) if lines else "ไม่พบข้อมูลสัญญาล่าสุด"
     s50_summary += f"\n\n📊 **สรุปรวม SET50 Futures ทั้งหมด**\n• ปริมาณการซื้อขายรวม: {total_vol:,} สัญญา\n• สถานะคงค้างรวม (OI): {total_oi:,} สัญญา"
+    
     return f"👥 **สรุปมูลค่าการซื้อขายตามประเภทนักลงทุน**\n\n{investor_summary}\n\n====================\n\n📈 **สรุป SET50 Futures วันนี้ (เรียงตาม OI สูงสุด):**\n\n{s50_summary}"
 
 def send_line_message(message):
@@ -227,6 +244,6 @@ def send_line_message(message):
     requests.post(url, headers=headers, json=payload)
 
 if __name__ == "__main__":
-    results, total_vol, total_oi, set_data, tfex_data = fetch_all_data_hybrid()
+    results, total_vol, total_oi, set_data, tfex_data = fetch_all_data_robust()
     msg = format_line_message(results, total_vol, total_oi, set_data, tfex_data)
     send_line_message(msg)
