@@ -21,36 +21,42 @@ def fetch_equity_index_data():
     equity_data = {}
     print("กำลังดึงข้อมูลมูลค่าการซื้อขายตลาดหุ้น (SET)...")
     
-    # 1. ลองดึงผ่าน API ตรงของ SETtrade ก่อน (เร็วและเสถียรที่สุด)
-    try:
-        url = "https://api.settrade.com/api/set/investor-type"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://www.settrade.com/"
-        }
-        res = requests.get(url, headers=headers, timeout=10)
-        if res.status_code == 200:
-            data = res.json()
-            # Map ข้อมูลจาก API Response
-            for item in data.get("data", []):
-                name = item.get("investorTypeName", "")
-                net = item.get("netBuySell", 0)
-                if "ต่างชาติ" in name or "ต่างประเทศ" in name:
-                    equity_data["นักลงทุนต่างชาติ"] = format_number_with_sign(str(net))
-                elif "สถาบัน" in name:
-                    equity_data["นักลงทุนสถาบัน"] = format_number_with_sign(str(net))
-                elif "ส่วนบุคคล" in name or "ภายในประเทศ" in name or "รายย่อย" in name:
-                    equity_data["นักลงทุนภายในประเทศ"] = format_number_with_sign(str(net))
-                elif "บัญชีบริษัทหลักทรัพย์" in name or "บล." in name:
-                    equity_data["บัญชีบริษัทหลักทรัพย์"] = format_number_with_sign(str(net))
-            
-            if len(equity_data) >= 4:
-                print("ดึงข้อมูล SET ผ่าน API สำเร็จ")
-                return equity_data
-    except Exception as e:
-        print(f"SET API Direct Failed: {e}, Falling back to Playwright...")
+    # 1. พยายามยิงดึงจาก SET API โดยตรงก่อน (ไวและไม่ติด Browser Timeout)
+    api_urls = [
+        "https://api.settrade.com/api/market/investor-type/set",
+        "https://api.settrade.com/api/set/investor-type"
+    ]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://www.settrade.com/"
+    }
+    
+    for url in api_urls:
+        try:
+            res = requests.get(url, headers=headers, timeout=8)
+            if res.status_code == 200:
+                data = res.json()
+                items = data.get("data", []) if isinstance(data.get("data"), list) else data.get("investorTypes", [])
+                for item in items:
+                    name = item.get("investorTypeName", "") or item.get("name", "")
+                    net = item.get("netBuySell", 0) or item.get("netValue", 0)
+                    
+                    if "ต่างชาติ" in name or "ต่างประเทศ" in name:
+                        equity_data["นักลงทุนต่างชาติ"] = format_number_with_sign(str(net))
+                    elif "สถาบัน" in name:
+                        equity_data["นักลงทุนสถาบัน"] = format_number_with_sign(str(net))
+                    elif "ส่วนบุคคล" in name or "ภายในประเทศ" in name or "รายย่อย" in name:
+                        equity_data["นักลงทุนภายในประเทศ"] = format_number_with_sign(str(net))
+                    elif "บัญชีบริษัทหลักทรัพย์" in name or "บล." in name:
+                        equity_data["บัญชีบริษัทหลักทรัพย์"] = format_number_with_sign(str(net))
+                
+                if len(equity_data) >= 4:
+                    print("ดึงข้อมูล SET ผ่าน API สำเร็จ")
+                    return equity_data
+        except Exception:
+            pass
 
-    # 2. หาก API ไม่ตอบสนอง ใช้ Playwright Web Scraping แบบเจาะลึก
+    # 2. Fallback: ใช้ Playwright ดึงจาก URL historical-report
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -60,30 +66,31 @@ def fetch_equity_index_data():
         page = context.new_page()
 
         try:
-            page.goto("https://www.settrade.com/th/equities/market-data/overview", wait_until="networkidle", timeout=60000)
-            time.sleep(5)
+            # ใช้ domcontentloaded เพื่อป้องกัน timeout จาก networkidle
+            page.goto("https://www.settrade.com/th/equities/market-data/historical-report/investor-type", wait_until="domcontentloaded", timeout=45000)
+            time.sleep(6)
             
-            # ดึงข้อความในตารางทั้งหมดบนหน้า Overview
-            tables = page.locator("table").all()
-            for tbl in tables:
-                text = tbl.text_content()
-                if "สถาบัน" in text or "ต่างชาติ" in text or "ต่างประเทศ" in text:
-                    rows = tbl.locator("tr").all()
-                    for r in rows:
-                        row_text = " ".join(r.text_content().split())
-                        nums = re.findall(r'[-+]?\d{1,3}(?:,\d{3})*(?:\.\d+)?|-', row_text)
-                        if not nums:
-                            continue
-                            
-                        val = format_number_with_sign(nums[-1])
-                        if "สถาบัน" in row_text:
-                            equity_data["นักลงทุนสถาบัน"] = val
-                        elif "บัญชีบริษัทหลักทรัพย์" in row_text or "หลักทรัพย์" in row_text:
-                            equity_data["บัญชีบริษัทหลักทรัพย์"] = val
-                        elif "ต่างชาติ" in row_text or "ต่างประเทศ" in row_text:
-                            equity_data["นักลงทุนต่างชาติ"] = val
-                        elif "ในประเทศ" in row_text or "รายย่อย" in row_text:
-                            equity_data["นักลงทุนภายในประเทศ"] = val
+            try:
+                page.click("button:has-text('ยอมรับ')", timeout=3000)
+            except Exception:
+                pass
+            
+            rows = page.locator("tr").all()
+            for r in rows:
+                row_text = " ".join(r.text_content().split())
+                nums = re.findall(r'[-+]?\d{1,3}(?:,\d{3})*(?:\.\d+)?|-', row_text)
+                if not nums:
+                    continue
+                
+                val = format_number_with_sign(nums[-1])
+                if "ต่างชาติ" in row_text or "ต่างประเทศ" in row_text:
+                    equity_data["นักลงทุนต่างชาติ"] = val
+                elif "สถาบัน" in row_text:
+                    equity_data["นักลงทุนสถาบัน"] = val
+                elif "ภายในประเทศ" in row_text or "ส่วนบุคคล" in row_text or "รายย่อย" in row_text:
+                    equity_data["นักลงทุนภายในประเทศ"] = val
+                elif "บัญชีบริษัทหลักทรัพย์" in row_text or "หลักทรัพย์" in row_text:
+                    equity_data["บัญชีบริษัทหลักทรัพย์"] = val
 
         except Exception as e:
             print(f"Playwright SET Error: {e}")
