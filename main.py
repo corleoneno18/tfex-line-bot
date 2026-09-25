@@ -56,7 +56,7 @@ def get_active_s50_symbols():
         symbols.append(f"S50{c}{yr}")
     return list(dict.fromkeys(symbols))
 
-def fetch_data_hybrid():
+def fetch_data_robust():
     from playwright.sync_api import sync_playwright
 
     set_data = {
@@ -76,88 +76,117 @@ def fetch_data_hybrid():
     total_oi = 0
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            viewport={'width': 1280, 'height': 800}
+        # เปิดตัวเลือกเพิ่มเติมเพื่อเลียนแบบ Browser จริง ป้องกันการโดนบล็อก
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox"
+            ]
         )
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            viewport={'width': 1366, 'height': 768},
+            locale="th-TH"
+        )
+        
+        # หลบการตรวจจับ webdriver
         page = context.new_page()
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-        # 1. โหลดหน้าหลักเพื่อตั้งค่า Cookies และ Intercept API
         print("กำลังดึงประเภทนักลงทุน...")
-        api_responses = {}
 
-        def handle_response(response):
-            if "api/set/market/investor-type" in response.url:
-                try:
-                    api_responses["set_investor"] = response.json()
-                except Exception:
-                    pass
-            elif "api/tfex/market/investor-type" in response.url:
-                try:
-                    api_responses["tfex_investor"] = response.json()
-                except Exception:
-                    pass
-
-        page.on("response", handle_response)
-
+        # 1. เข้าหน้าเว็บหลักเพื่อสร้าง Session / Security Cookies
         try:
-            page.goto("https://www.settrade.com/th/equities/market-data/investor-type", wait_until="domcontentloaded", timeout=15000)
-            page.wait_for_timeout(2000)
-        except Exception as e:
-            print(f"Error navigating SET Investor: {e}")
+            page.goto("https://www.settrade.com/th/equities/market-data/investor-type", wait_until="domcontentloaded", timeout=20000)
+            page.wait_for_timeout(3000)
+            
+            # เรียก API ผ่าน fetch ของตัว Browser โดยตรง (พึ่งพา Session/Cookies ของหน้าเว็บ)
+            set_res = page.evaluate("""async () => {
+                try {
+                    const res = await fetch('https://api.settrade.com/api/set/market/investor-type', {
+                        headers: { 'Accept': 'application/json, text/plain, */*' }
+                    });
+                    return await res.json();
+                } catch (e) {
+                    return null;
+                }
+            }""")
 
+            if set_res:
+                items = set_res if isinstance(set_res, list) else set_res.get("investorTypes", set_res.get("data", []))
+                if isinstance(items, list):
+                    for item in items:
+                        name = str(item.get("investorTypeName", item.get("name", "")))
+                        net_val = item.get("netValue", item.get("net", "-"))
+                        if isinstance(net_val, (int, float)):
+                            net_val = f"{net_val:+,.2f}"
+
+                        if "สถาบัน" in name:
+                            set_data["นักลงทุนสถาบัน"] = net_val
+                        elif "บริษัทหลักทรัพย์" in name or "บัญชี บล." in name or "Prop" in name:
+                            set_data["บัญชีบริษัทหลักทรัพย์"] = net_val
+                        elif "ต่างประเทศ" in name or "ต่างชาติ" in name or "Foreign" in name:
+                            set_data["นักลงทุนต่างชาติ"] = net_val
+                        elif "ในประเทศ" in name or "ทั่วไป" in name or "Retail" in name:
+                            set_data["นักลงทุนภายในประเทศ"] = net_val
+
+        except Exception as e:
+            print(f"Error fetching SET Investor: {e}")
+
+        # 2. ดึงข้อมูล TFEX Investor Type
         try:
-            page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="domcontentloaded", timeout=15000)
-            page.wait_for_timeout(2000)
+            page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="domcontentloaded", timeout=20000)
+            page.wait_for_timeout(3000)
+
+            tfex_res = page.evaluate("""async () => {
+                try {
+                    const res = await fetch('https://api.settrade.com/api/tfex/market/investor-type', {
+                        headers: { 'Accept': 'application/json, text/plain, */*' }
+                    });
+                    return await res.json();
+                } catch (e) {
+                    return null;
+                }
+            }""")
+
+            if tfex_res:
+                items = tfex_res if isinstance(tfex_res, list) else tfex_res.get("investorTypes", tfex_res.get("data", []))
+                if isinstance(items, list):
+                    for item in items:
+                        cat = item.get("categoryName", item.get("productGroup", item.get("product", "")))
+                        inst = item.get("institutionNet", item.get("instNet", "-"))
+                        foreign = item.get("foreignNet", item.get("foreignNetValue", "-"))
+                        retail = item.get("retailNet", item.get("localNet", "-"))
+
+                        tfex_data["นักลงทุนสถาบัน"][cat] = f"{inst:+,.0f}" if isinstance(inst, (int, float)) else str(inst)
+                        tfex_data["นักลงทุนต่างชาติ"][cat] = f"{foreign:+,.0f}" if isinstance(foreign, (int, float)) else str(foreign)
+                        tfex_data["นักลงทุนภายในประเทศ"][cat] = f"{retail:+,.0f}" if isinstance(retail, (int, float)) else str(retail)
+
         except Exception as e:
-            print(f"Error navigating TFEX Investor: {e}")
+            print(f"Error fetching TFEX Investor: {e}")
 
-        # ประมวลผล SET Investor Data
-        set_json = api_responses.get("set_investor")
-        if set_json:
-            items = set_json if isinstance(set_json, list) else set_json.get("investorTypes", set_json.get("data", []))
-            if isinstance(items, list):
-                for item in items:
-                    name = str(item.get("investorTypeName", item.get("name", "")))
-                    net_val = item.get("netValue", item.get("net", "-"))
-                    if isinstance(net_val, (int, float)):
-                        net_val = f"{net_val:+,.2f}"
-
-                    if "สถาบัน" in name:
-                        set_data["นักลงทุนสถาบัน"] = net_val
-                    elif "บริษัทหลักทรัพย์" in name or "บัญชี บล." in name or "Prop" in name:
-                        set_data["บัญชีบริษัทหลักทรัพย์"] = net_val
-                    elif "ต่างประเทศ" in name or "ต่างชาติ" in name or "Foreign" in name:
-                        set_data["นักลงทุนต่างชาติ"] = net_val
-                    elif "ในประเทศ" in name or "ทั่วไป" in name or "Retail" in name:
-                        set_data["นักลงทุนภายในประเทศ"] = net_val
-
-        # ประมวลผล TFEX Investor Data
-        tfex_json = api_responses.get("tfex_investor")
-        if tfex_json:
-            items = tfex_json if isinstance(tfex_json, list) else tfex_json.get("investorTypes", tfex_json.get("data", []))
-            if isinstance(items, list):
-                for item in items:
-                    cat = item.get("categoryName", item.get("productGroup", item.get("product", "")))
-                    inst = item.get("institutionNet", item.get("instNet", "-"))
-                    foreign = item.get("foreignNet", item.get("foreignNetValue", "-"))
-                    retail = item.get("retailNet", item.get("localNet", "-"))
-
-                    tfex_data["นักลงทุนสถาบัน"][cat] = f"{inst:+,.0f}" if isinstance(inst, (int, float)) else str(inst)
-                    tfex_data["นักลงทุนต่างชาติ"][cat] = f"{foreign:+,.0f}" if isinstance(foreign, (int, float)) else str(foreign)
-                    tfex_data["นักลงทุนภายในประเทศ"][cat] = f"{retail:+,.0f}" if isinstance(retail, (int, float)) else str(retail)
-
-        # 2. ดึงข้อมูลสัญญา SET50 Futures รายตัว (ใช้วิธี API Direct จาก Context)
+        # 3. ดึงข้อมูลสัญญา SET50 Futures รายตัว
         symbols = get_active_s50_symbols()
         print(f"กำลังดึงข้อมูลสัญญา SET50: {symbols}")
 
         for sym in symbols:
             try:
-                api_url = f"https://api.settrade.com/api/tfex/quote/{sym}/overview"
-                res = page.request.get(api_url)
-                if res.ok:
-                    d = res.json()
+                # เรียก fetch API ผ่านใน Context ของหน้าเว็บ Settrade
+                quote_res = page.evaluate(f"""async () => {{
+                    try {{
+                        const res = await fetch('https://api.settrade.com/api/tfex/quote/{sym}/overview', {{
+                            headers: {{ 'Accept': 'application/json, text/plain, */*' }}
+                        }});
+                        return await res.json();
+                    }} catch (e) {{
+                        return null;
+                    }}
+                }}""")
+
+                if quote_res:
+                    d = quote_res
                     last = d.get("last", d.get("lastPrice", "-"))
                     change = d.get("change", 0)
                     change_pct = d.get("percentChange", d.get("changePercent", 0))
@@ -173,7 +202,7 @@ def fetch_data_hybrid():
                     change_str = f"{change:+.2f} ({change_pct:+.2f}%)" if isinstance(change, (int, float)) else "-"
                     rem = calculate_remaining_days(sym)
 
-                    if o_num > 0 or v_num > 0 or last != "-":
+                    if o_num > 0 or v_num > 0 or (isinstance(last, (int, float)) and last > 0):
                         results.append({
                             "symbol": sym, "remaining_days": rem,
                             "last": f"{last:,.2f}" if isinstance(last, (int, float)) else str(last),
@@ -246,7 +275,7 @@ def send_line_message(message):
     print(f"--- LINE API RESULT --- Code: {res.status_code}")
 
 if __name__ == "__main__":
-    results, total_vol, total_oi, set_data, tfex_data = fetch_data_hybrid()
+    results, total_vol, total_oi, set_data, tfex_data = fetch_data_robust()
     msg = format_line_message(results, total_vol, total_oi, set_data, tfex_data)
     send_line_message(msg)
     print("ทำงานเสร็จสิ้น!")
