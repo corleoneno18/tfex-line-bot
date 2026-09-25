@@ -34,10 +34,10 @@ def get_tfex_data_via_playwright():
             return None, None
 
 def fallback_parse_content(text_content):
-    """สกัดข้อมูลตาราง Settrade TFEX และติดป้ายกำกับหัวข้อรวมถึงราคาเฉลี่ย"""
-    print("สลับมาใช้ระบบ Fallback Regex Extractor (เพิ่มราคาเฉลี่ย)...")
+    """สกัดข้อมูลตาราง Settrade TFEX ปรับให้ดึงราคาเปิด (Open Price) แทนราคาเฉลี่ย"""
+    print("สลับมาใช้ระบบ Fallback Regex Extractor (ปรับใช้ราคาเปิด)...")
     
-    # Pattern จับแถวตาราง TFEX: [Symbol] [Month/Year] [Last] [Chg] [%Chg] [Open] [High] [Low] [Avg] [Vol] [OI]
+    # Pattern จับแถวตาราง Settrade TFEX: [Symbol] [Month/Year] [Last] [Chg] [%Chg] [Open] [High] [Low] [Vol] [OI]
     pattern = r'(S50[A-Z0-9]+)\s+([ก-ฮa-zA-Z\.\s\d]+?)\s+([\d\.\,\-]+)\s+([\+\-\d\.\,]+)\s+([\+\-\d\.\,%]+)\s+([\d\.\,\-]+)\s+([\d\.\,\-]+)\s+([\d\.\,\-]+)\s+([\d\,]+)\s+([\d\,]+)'
     matches = re.findall(pattern, text_content)
     
@@ -47,7 +47,7 @@ def fallback_parse_content(text_content):
     
     if matches:
         for m in matches:
-            sym, month, last, chg, pct, high, low, avg_p, vol, oi = m
+            sym, month, last, chg, pct, open_p, high, low, vol, oi = m
             
             # คำนวณผลรวม
             v_num = int(vol.replace(',', '')) if vol.replace(',', '').isdigit() else 0
@@ -56,11 +56,11 @@ def fallback_parse_content(text_content):
             total_oi += o_num
             
             lines.append(
-                f"📌 [{sym}] ({month.strip()})\n"
+                f"📌 **{sym}** ({month.strip()})\n"
                 f"• ราคาล่าสุด: {last}\n"
                 f"• เปลี่ยนแปลง: {chg} ({pct})\n"
+                f"• ราคาเปิด: {open_p}\n"
                 f"• ราคาสูงสุด / ต่ำสุด: {high} / {low}\n"
-                f"• ราคาเฉลี่ย: {avg_p}\n"
                 f"• ปริมาณซื้อขาย: {vol} สัญญา\n"
                 f"• สถานะคงค้าง (OI): {oi} สัญญา"
             )
@@ -74,17 +74,17 @@ def fallback_parse_content(text_content):
                 tokens = raw_line.split()
                 if len(tokens) >= 9:
                     lines.append(
-                        f"📌 [{sym}]\n"
+                        f"📌 **{sym}**\n"
                         f"• ราคาล่าสุด: {tokens[3] if len(tokens)>3 else '-'}\n"
                         f"• เปลี่ยนแปลง: {tokens[4] if len(tokens)>4 else '-'} ({tokens[5] if len(tokens)>5 else '-'})\n"
-                        f"• ราคาสูงสุด / ต่ำสุด: {tokens[6] if len(tokens)>6 else '-'} / {tokens[7] if len(tokens)>7 else '-'}\n"
-                        f"• ราคาเฉลี่ย: {tokens[8] if len(tokens)>8 else '-'}"
+                        f"• ราคาเปิด: {tokens[6] if len(tokens)>6 else '-'}\n"
+                        f"• ราคาสูงสุด / ต่ำสุด: {tokens[7] if len(tokens)>7 else '-'} / {tokens[8] if len(tokens)>8 else '-'}"
                     )
 
     if lines:
         summary_text = "\n\n".join(lines)
         if total_vol > 0 or total_oi > 0:
-            summary_text += f"\n\n📊 **สรุปผลรวม**\n• ปริมาณซื้อขายรวม: {total_vol:,} สัญญา\n• สถานะคงค้างรวม (OI): {total_oi:,} สัญญา"
+            summary_text += f"\n\n📊 **สรุปรวม SET50 Futures ทั้งหมด**\n• ปริมาณการซื้อขายรวม: {total_vol:,} สัญญา\n• สถานะคงค้างรวม (OI): {total_oi:,} สัญญา"
         return summary_text
 
     return "ระบบไม่สามารถจัดรูปแบบตารางได้ กรุณาตรวจสอบหน้าเว็บ Settrade อีกครั้ง"
@@ -97,11 +97,11 @@ def summarize_with_gemini(raw_text):
     จากข้อความหน้าเว็บ Settrade TFEX ด้านล่างนี้ ให้สกัดข้อมูลตารางราคาของ SET50 Futures ทุก Series ทั้งหมดที่มี (เช่น S50U26, S50Z26, S50H27 ฯลฯ)
     แล้วจัดรูปแบบสรุปเป็นข้อความอ่านง่ายสำหรับส่งเข้า LINE ดังนี้:
 
-    📌 [ชื่อย่อสัญญา]
+    📌 **[ชื่อย่อสัญญา]**
     • ราคาล่าสุด: 
     • เปลี่ยนแปลง: (พร้อม %)
+    • ราคาเปิด: 
     • ราคาสูงสุด / ต่ำสุด: 
-    • ราคาเฉลี่ย: 
     • ปริมาณ (สัญญา): 
     • สถานะคงค้าง (OI): 
 
