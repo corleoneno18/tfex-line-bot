@@ -5,7 +5,6 @@ import requests
 from playwright.sync_api import sync_playwright
 
 def format_number_with_sign(val_str):
-    """แปลงตัวเลขให้มีเครื่องหมาย + นำหน้าหากเป็นค่าบวก"""
     if not val_str or val_str == "-":
         return "-"
     clean_val = val_str.replace("+", "").replace(",", "").strip()
@@ -19,10 +18,9 @@ def format_number_with_sign(val_str):
         return val_str
 
 def fetch_equity_index_data():
-    """ดึงข้อมูลมูลค่าการซื้อขายตามกลุ่มนักลงทุนตลาดหุ้น (SET)"""
     equity_data = {}
-
     print("กำลังดึงข้อมูลมูลค่าการซื้อขายตลาดหุ้น (SET)...")
+    
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -32,24 +30,21 @@ def fetch_equity_index_data():
         page = context.new_page()
 
         try:
-            # ไปหน้าประเภทนักลงทุนของ SET
-            page.goto("https://www.settrade.com/th/equities/market-data/investor-type", wait_until="domcontentloaded", timeout=45000)
+            page.goto("https://www.settrade.com/th/equities/market-data/investor-type", wait_until="domcontentloaded", timeout=60000)
             
-            # รอ 5 วินาทีให้สคริปต์หน้าเว็บทำงาน
-            time.sleep(5)
+            # รอให้ตารางหรือเนื้อหาหลักเรนเดอร์สำเร็จ
+            time.sleep(6)
             
-            # หากมี Cookie Banner หรือ Modal ให้ยอมรับ/ปิด
+            # ปิด Popup / Cookie Banner หากมี
             try:
                 page.click("button:has-text('ยอมรับ')", timeout=3000)
             except Exception:
                 pass
             
-            # เลื่อนหน้าจอลงมาเล็กน้อยเพื่อ Trigger Lazy Loading
-            page.evaluate("window.scrollBy(0, 300)")
-            time.sleep(3)
+            page.evaluate("window.scrollBy(0, 400)")
+            time.sleep(2)
 
-            # ค้นหาตาราง
-            rows = page.locator("table tr").all()
+            rows = page.locator("tr").all()
             
             mapping = {
                 "สถาบันในประเทศ": "นักลงทุนสถาบัน",
@@ -64,22 +59,18 @@ def fetch_equity_index_data():
                 
                 for key_th, key_name in mapping.items():
                     if key_th in cleaned_text:
-                        # ดึงตัวเลขทั้งหมดในแถว
                         nums = re.findall(r'[-+]?\d{1,3}(?:,\d{3})*(?:\.\d+)?|-', cleaned_text)
                         if nums:
-                            # ยอดสุทธิอยู่ตัวเลขสุดท้ายของแถว
-                            net_val = nums[-1]
-                            equity_data[key_name] = format_number_with_sign(net_val)
+                            equity_data[key_name] = format_number_with_sign(nums[-1])
 
         except Exception as e:
-            print(f"Playwright Error: {e}")
+            print(f"Playwright SET Error: {e}")
         finally:
             browser.close()
 
     return equity_data
 
 def format_equity_message(equity_data):
-    """จัดรูปแบบข้อความสรุป SET (ไม่มี ** เครื่องหมายตัวหนา)"""
     msg = (
         "📊 สรุปมูลค่าการซื้อขายตามกลุ่มนักลงทุน (SET)\n\n"
         f"🌐 นักลงทุนต่างชาติ: {equity_data.get('นักลงทุนต่างชาติ', '-')} ลบ.\n"
