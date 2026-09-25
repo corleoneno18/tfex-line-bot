@@ -1,10 +1,10 @@
 import os
+import json
 import time
 import requests
 from google import genai
 
 def get_tfex_data():
-    # ยิง API ตรงไปที่ Settrade เพื่อดึง JSON ข้อมูลตารางราคา
     url = "https://www.settrade.com/api/settrade/derivatives/market-data/trading-quotation-by-series?underlying=SET50"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -21,6 +21,48 @@ def get_tfex_data():
     url_fallback = "https://www.settrade.com/th/derivatives/market-data/trading-quotation-by-series"
     res = requests.get(url_fallback, headers=headers)
     return res.text[:15000]
+
+def build_direct_summary(raw_json_str):
+    """กรณี Gemini ไม่พร้อมทำงาน สรุปข้อมูลตารางตรงจาก JSON"""
+    try:
+        data = json.loads(raw_json_str)
+        series_list = data.get("derivativesTradingQuotationBySeries", {}).get("seriesList", [])
+        
+        lines = []
+        total_vol = 0
+        total_oi = 0
+        
+        for item in series_list:
+            symbol = item.get("symbol", "-")
+            last = item.get("lastPrice", "-")
+            change = item.get("change", "-")
+            pct_change = item.get("percentChange", "-")
+            high = item.get("high", "-")
+            low = item.get("low", "-")
+            volume = item.get("volume", 0)
+            oi = item.get("openInterest", 0)
+            open_p = item.get("openPrice", "-")
+            avg_p = item.get("averagePrice", "-")
+            
+            if isinstance(volume, (int, float)): total_vol += volume
+            if isinstance(oi, (int, float)): total_oi += oi
+            
+            lines.append(
+                f"📌 [{symbol}]\n"
+                f"• ราคาล่าสุด: {last}\n"
+                f"• เปลี่ยนแปลง: {change} ({pct_change}%)\n"
+                f"• สูงสุด / ต่ำสุด: {high} / {low}\n"
+                f"• ปริมาณ (สัญญา): {volume:,} \n"
+                f"• สถานะคงค้าง: {oi:,}\n"
+                f"• ราคาเปิด / ราคาเฉลี่ย: {open_p} / {avg_p}\n"
+            )
+            
+        summary_text = "\n".join(lines)
+        summary_text += f"\n📊 รวม SET50 Futures\n• ปริมาณรวม: {total_vol:,} สัญญา\n• สถานะคงค้างรวม: {total_oi:,} สัญญา"
+        return summary_text
+    except Exception as e:
+        print(f"ไม่สามารถแปลงข้อมูลแบบ Direct สรุปได้: {e}")
+        return "ไม่สามารถประมวลผลข้อมูล SET50 Futures ได้ในขณะนี้"
 
 def summarize_with_gemini(raw_data):
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -44,31 +86,28 @@ def summarize_with_gemini(raw_data):
     {raw_data}
     """
     
-    # รายชื่อโมเดลที่จะใช้ (ถ้าตัวแรกยุ่ง ให้สลับไปใช้ตัวถัดไปทันที)
-    models_to_try = ["gemini-3.8-flash", "gemini-2.5-flash"]
-    
-    for model_name in models_to_try:
-        print(f"--- กำลังทดลองใช้โมเดล: {model_name} ---")
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                print(f"เรียก Gemini API ({model_name}) ครั้งที่ {attempt + 1}...")
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt
-                )
-                print(f"สำเร็จด้วยโมเดล: {model_name}")
-                return response.text
-            except Exception as e:
-                err_msg = str(e)
-                if "503" in err_msg or "UNAVAILABLE" in err_msg:
-                    print(f"เซิร์ฟเวอร์หนาแน่น (503) กำลังลองใหม่ใน 4 วินาที...")
-                    time.sleep(4)
-                else:
-                    print(f"เกิดข้อผิดพลาดกับ {model_name}: {err_msg}")
-                    break # ข้ามไปลองโมเดลถัดไป
-                    
-    raise Exception("ไม่สามารถดึงข้อมูลจาก Gemini API ได้เนื่องจากเซิร์ฟเวอร์หนาแน่นทุกโมเดล")
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            print(f"กำลังเรียก Gemini API (gemini-3.8-flash) ครั้งที่ {attempt + 1}...")
+            response = client.models.generate_content(
+                model="gemini-3.8-flash",
+                contents=prompt
+            )
+            print("Gemini Summary Success!")
+            return response.text
+        except Exception as e:
+            err_msg = str(e)
+            if "503" in err_msg or "UNAVAILABLE" in err_msg:
+                wait_time = (attempt + 1) * 5
+                print(f"เซิร์ฟเวอร์หนาแน่น (503) รอ {wait_time} วินาทีก่อนลองใหม่...")
+                time.sleep(wait_time)
+            else:
+                print(f"เกิดข้อผิดพลาด: {err_msg}")
+                break
+                
+    print("Gemini API ไม่พร้อมใช้งานเนื่องจากเซิร์ฟเวอร์หนาแน่น สลับไปใช้การจัดรูปแบบข้อความโดยตรง...")
+    return build_direct_summary(raw_data)
 
 def send_line_message(message):
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
@@ -98,7 +137,6 @@ if __name__ == "__main__":
     try:
         raw = get_tfex_data()
         summary = summarize_with_gemini(raw)
-        print("Gemini Summary Success!")
         send_line_message(summary)
         print("ทำงานสำเร็จ!")
     except Exception as e:
