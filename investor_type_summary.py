@@ -73,63 +73,57 @@ def fetch_investor_type_data():
         except Exception as e:
             print(f"Error TFEX Investor Type: {e}")
 
-        # 2. ดึงข้อมูลหน้า Overview และคลิกขยายเมนู Total Options / Equity Index อัตโนมัติ
+        # 2. ดึงข้อมูลหน้า Overview เจาะจงเฉพาะกลุ่ม Equity Index เท่านั้น
         try:
             page.goto("https://www.settrade.com/th/derivatives/overview", wait_until="domcontentloaded", timeout=60000)
-            time.sleep(5)
+            time.sleep(6)
             
             try:
                 page.click("button:has-text('ยอมรับ')", timeout=3000)
             except Exception:
                 pass
 
-            # สั่งคลิกขยายเมนูผ่าน JavaScript เพื่อให้ DOM เรนเดอร์ตัวเลข
+            # คลิกเปิดเมนู Total Options และ Equity Index อัตโนมัติ
             page.evaluate("""() => {
                 const elements = Array.from(document.querySelectorAll('*'));
                 elements.forEach(el => {
-                    if (el.textContent.trim() === 'Total Options' || el.textContent.trim() === 'Equity Index') {
+                    const txt = el.textContent.trim();
+                    if (txt === 'Total Options' || txt === 'Equity Index') {
                         el.click();
                     }
                 });
             }""")
             time.sleep(3)
 
-            # ใช้ JavaScript กวาดหาค่า Call และ Put จากหน้าเว็บโดยตรง
+            # ใช้ JS ค้นหาแถว Call / Put ที่อยู่ใต้หัวข้อ Equity Index เท่านั้น
             overview_data = page.evaluate("""() => {
                 let callVal = "-";
                 let putVal = "-";
-                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-                let node;
-                while(node = walker.nextNode()) {
-                    const text = node.nodeValue.trim();
-                    if (text === "Call") {
-                        let parent = node.parentElement;
-                        for (let i = 0; i < 4; i++) {
-                            if (!parent) break;
-                            const rowText = parent.innerText;
-                            if (!rowText.includes("Put / Call")) {
-                                const nums = rowText.match(/\\b\\d{1,3}(?:,\\d{3})*\\b/g);
-                                if (nums && nums.length > 0) {
-                                    callVal = nums[nums.length - 1];
-                                    break;
-                                }
-                            }
-                            parent = parent.parentElement;
-                        }
+                const rows = Array.from(document.querySelectorAll('tr, div'));
+                let inEquityIndex = false;
+
+                for (let row of rows) {
+                    const text = row.innerText || "";
+                    if (text.includes("Equity Index")) {
+                        inEquityIndex = true;
+                        continue;
                     }
-                    if (text === "Put") {
-                        let parent = node.parentElement;
-                        for (let i = 0; i < 4; i++) {
-                            if (!parent) break;
-                            const rowText = parent.innerText;
-                            if (!rowText.includes("Put / Call")) {
-                                const nums = rowText.match(/\\b\\d{1,3}(?:,\\d{3})*\\b/g);
-                                if (nums && nums.length > 0) {
-                                    putVal = nums[nums.length - 1];
-                                    break;
-                                }
+                    if (text.includes("Currency") || text.includes("Total Market")) {
+                        inEquityIndex = false;
+                    }
+
+                    if (inEquityIndex) {
+                        if (text.includes("Call") && !text.includes("Put / Call") && !text.includes("Options")) {
+                            const nums = text.match(/\\b\\d{1,3}(?:,\\d{3})*\\b/g);
+                            if (nums && nums.length > 0) {
+                                callVal = nums[nums.length - 1];
                             }
-                            parent = parent.parentElement;
+                        }
+                        if (text.includes("Put") && !text.includes("Put / Call") && !text.includes("Options")) {
+                            const nums = text.match(/\\b\\d{1,3}(?:,\\d{3})*\\b/g);
+                            if (nums && nums.length > 0) {
+                                putVal = nums[nums.length - 1];
+                            }
                         }
                     }
                 }
