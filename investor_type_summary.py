@@ -73,7 +73,7 @@ def fetch_investor_type_data():
         except Exception as e:
             print(f"Error TFEX Investor Type: {e}")
 
-        # 2. ดึงข้อมูลหน้า Overview พร้อมคลิกขยายเมนูพับ (Accordion) เพื่อให้โหลดเลข Call / Put
+        # 2. ดึงข้อมูลหน้า Overview (Equity Index Call / Put) จากช่องขวาสุด
         try:
             page.goto("https://www.settrade.com/th/derivatives/overview", wait_until="domcontentloaded", timeout=60000)
             time.sleep(5)
@@ -83,7 +83,6 @@ def fetch_investor_type_data():
             except Exception:
                 pass
 
-            # คลิกเปิดเมนู Total Options หรือ Equity Index เพื่อให้ DOM เรนเดอร์ตัวเลขปริมาณซื้อขายออกมา
             try:
                 page.locator("text=Total Options").click(timeout=3000)
                 time.sleep(2)
@@ -96,23 +95,22 @@ def fetch_investor_type_data():
             except Exception:
                 pass
 
-            # กวาดหาแถว Call และ Put 
-            rows = page.locator("tr, div").all()
+            rows = page.locator("tr").all()
             for r in rows:
-                text = r.text_content().strip()
-                cleaned_text = " ".join(text.split())
-                
-                # ตรวจจับแถว Call
-                if "Call" in cleaned_text and "Options" not in cleaned_text and "Put / Call" not in cleaned_text:
-                    nums = re.findall(r'\b\d{1,3}(?:,\d{3})*\b', cleaned_text)
-                    if nums and overview_data["Call"] == "-":
-                        overview_data["Call"] = nums[0]
-                
-                # ตรวจจับแถว Put
-                elif "Put" in cleaned_text and "Options" not in cleaned_text and "Put / Call" not in cleaned_text:
-                    nums = re.findall(r'\b\d{1,3}(?:,\d{3})*\b', cleaned_text)
-                    if nums and overview_data["Put"] == "-":
-                        overview_data["Put"] = nums[0]
+                r_text = r.text_content()
+                if "Call" in r_text and "Options" not in r_text and "Put / Call" not in r_text:
+                    tds = r.locator("td").all()
+                    if len(tds) >= 2:
+                        # เอาค่าจากช่องขวาสุด (Open Interest)
+                        val = tds[-1].text_content().strip()
+                        if val and val != "-":
+                            overview_data["Call"] = val
+                elif "Put" in r_text and "Options" not in r_text and "Put / Call" not in r_text:
+                    tds = r.locator("td").all()
+                    if len(tds) >= 2:
+                        val = tds[-1].text_content().strip()
+                        if val and val != "-":
+                            overview_data["Put"] = val
 
         except Exception as e:
             print(f"Error TFEX Overview Options: {e}")
@@ -146,8 +144,6 @@ def format_investor_message(tfex_data, overview_data):
         investor_lines.append("\n".join(lines))
         
     msg = "👥 สรุปมูลค่าการซื้อขายตามประเภทนักลงทุน (TFEX)\n\n" + "\n\n".join(investor_lines)
-    
-    # เพิ่มส่วน Total Options แบบไม่มีเครื่องหมาย ** (สะอาดตา)
     msg += f"\n\n📈 Total Options (Equity Index)\n• Call: {overview_data.get('Call', '-')}\n• Put: {overview_data.get('Put', '-')}"
     
     return msg
