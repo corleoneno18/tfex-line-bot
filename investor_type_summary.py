@@ -73,38 +73,68 @@ def fetch_investor_type_data():
         except Exception as e:
             print(f"Error TFEX Investor Type: {e}")
 
-        # 2. ดึงข้อมูลหน้า Overview โดยใช้ Locator เจาะจงแถว Call และ Put ภายใต้ Equity Index โดยตรง
+        # 2. ดึงข้อมูลหน้า Overview และคลิกขยายเมนู Total Options / Equity Index อัตโนมัติ
         try:
             page.goto("https://www.settrade.com/th/derivatives/overview", wait_until="domcontentloaded", timeout=60000)
-            time.sleep(6)
+            time.sleep(5)
             
             try:
                 page.click("button:has-text('ยอมรับ')", timeout=3000)
             except Exception:
                 pass
 
-            # เลื่อนหน้าจอลงมาเล็กน้อยเพื่อให้ตารางเรนเดอร์ครบถ้วน
-            page.evaluate("window.scrollBy(0, 300)")
-            time.sleep(2)
+            # สั่งคลิกขยายเมนูผ่าน JavaScript เพื่อให้ DOM เรนเดอร์ตัวเลข
+            page.evaluate("""() => {
+                const elements = Array.from(document.querySelectorAll('*'));
+                elements.forEach(el => {
+                    if (el.textContent.trim() === 'Total Options' || el.textContent.trim() === 'Equity Index') {
+                        el.click();
+                    }
+                });
+            }""")
+            time.sleep(3)
 
-            # ค้นหาทุกแถวในตารางเพื่อดึงตัวเลข Open Interest (ช่องขวาสุด) ของ Call และ Put
-            rows = page.locator("tr, div").all()
-            for r in rows:
-                txt = " ".join(r.text_content().split())
-                # เช็คแถวที่เป็น Call ของ Equity Index
-                if "Call" in txt and "Put / Call" not in txt and "Options" not in txt:
-                    tds = r.locator("td").all()
-                    if len(tds) >= 2:
-                        val = tds[-1].text_content().strip()
-                        if val and val != "-":
-                            overview_data["Call"] = val
-                # เช็คแถวที่เป็น Put ของ Equity Index
-                elif "Put" in txt and "Put / Call" not in txt and "Options" not in txt:
-                    tds = r.locator("td").all()
-                    if len(tds) >= 2:
-                        val = tds[-1].text_content().strip()
-                        if val and val != "-":
-                            overview_data["Put"] = val
+            # ใช้ JavaScript กวาดหาค่า Call และ Put จากหน้าเว็บโดยตรง
+            overview_data = page.evaluate("""() => {
+                let callVal = "-";
+                let putVal = "-";
+                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+                let node;
+                while(node = walker.nextNode()) {
+                    const text = node.nodeValue.trim();
+                    if (text === "Call") {
+                        let parent = node.parentElement;
+                        for (let i = 0; i < 4; i++) {
+                            if (!parent) break;
+                            const rowText = parent.innerText;
+                            if (!rowText.includes("Put / Call")) {
+                                const nums = rowText.match(/\\b\\d{1,3}(?:,\\d{3})*\\b/g);
+                                if (nums && nums.length > 0) {
+                                    callVal = nums[nums.length - 1];
+                                    break;
+                                }
+                            }
+                            parent = parent.parentElement;
+                        }
+                    }
+                    if (text === "Put") {
+                        let parent = node.parentElement;
+                        for (let i = 0; i < 4; i++) {
+                            if (!parent) break;
+                            const rowText = parent.innerText;
+                            if (!rowText.includes("Put / Call")) {
+                                const nums = rowText.match(/\\b\\d{1,3}(?:,\\d{3})*\\b/g);
+                                if (nums && nums.length > 0) {
+                                    putVal = nums[nums.length - 1];
+                                    break;
+                                }
+                            }
+                            parent = parent.parentElement;
+                        }
+                    }
+                }
+                return { Call: callVal, Put: putVal };
+            }""")
 
         except Exception as e:
             print(f"Error TFEX Overview Options: {e}")
