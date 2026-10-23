@@ -73,39 +73,33 @@ def fetch_investor_type_data():
         except Exception as e:
             print(f"Error TFEX Investor Type: {e}")
 
-        # 2. ดึงข้อมูลหน้า Overview (Equity Index Call / Put) จากช่องขวาสุด
+        # 2. ดึงข้อมูลหน้า Overview โดยใช้ Locator เจาะจงแถว Call และ Put ภายใต้ Equity Index โดยตรง
         try:
             page.goto("https://www.settrade.com/th/derivatives/overview", wait_until="domcontentloaded", timeout=60000)
-            time.sleep(5)
+            time.sleep(6)
             
             try:
                 page.click("button:has-text('ยอมรับ')", timeout=3000)
             except Exception:
                 pass
 
-            try:
-                page.locator("text=Total Options").click(timeout=3000)
-                time.sleep(2)
-            except Exception:
-                pass
+            # เลื่อนหน้าจอลงมาเล็กน้อยเพื่อให้ตารางเรนเดอร์ครบถ้วน
+            page.evaluate("window.scrollBy(0, 300)")
+            time.sleep(2)
 
-            try:
-                page.locator("text=Equity Index").click(timeout=3000)
-                time.sleep(2)
-            except Exception:
-                pass
-
-            rows = page.locator("tr").all()
+            # ค้นหาทุกแถวในตารางเพื่อดึงตัวเลข Open Interest (ช่องขวาสุด) ของ Call และ Put
+            rows = page.locator("tr, div").all()
             for r in rows:
-                r_text = r.text_content()
-                if "Call" in r_text and "Options" not in r_text and "Put / Call" not in r_text:
+                txt = " ".join(r.text_content().split())
+                # เช็คแถวที่เป็น Call ของ Equity Index
+                if "Call" in txt and "Put / Call" not in txt and "Options" not in txt:
                     tds = r.locator("td").all()
                     if len(tds) >= 2:
-                        # เอาค่าจากช่องขวาสุด (Open Interest)
                         val = tds[-1].text_content().strip()
                         if val and val != "-":
                             overview_data["Call"] = val
-                elif "Put" in r_text and "Options" not in r_text and "Put / Call" not in r_text:
+                # เช็คแถวที่เป็น Put ของ Equity Index
+                elif "Put" in txt and "Put / Call" not in txt and "Options" not in txt:
                     tds = r.locator("td").all()
                     if len(tds) >= 2:
                         val = tds[-1].text_content().strip()
