@@ -37,7 +37,7 @@ def fetch_investor_type_data():
         )
         page = context.new_page()
 
-        # 1. ดึงข้อมูลจากหน้า Investor Type เดิม
+        # 1. ดึงข้อมูลหน้า Investor Type ปกติ
         try:
             page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="domcontentloaded", timeout=60000)
             time.sleep(6)
@@ -73,25 +73,47 @@ def fetch_investor_type_data():
         except Exception as e:
             print(f"Error TFEX Investor Type: {e}")
 
-        # 2. ดึงข้อมูล Total Options (Call / Put) จากหน้า Overview ตามลิงก์ที่ให้มา
+        # 2. ดึงข้อมูลหน้า Overview พร้อมคลิกขยายเมนูพับ (Accordion) เพื่อให้โหลดเลข Call / Put
         try:
             page.goto("https://www.settrade.com/th/derivatives/overview", wait_until="domcontentloaded", timeout=60000)
             time.sleep(5)
             
-            rows = page.locator("tr").all()
+            try:
+                page.click("button:has-text('ยอมรับ')", timeout=3000)
+            except Exception:
+                pass
+
+            # คลิกเปิดเมนู Total Options หรือ Equity Index เพื่อให้ DOM เรนเดอร์ตัวเลขปริมาณซื้อขายออกมา
+            try:
+                page.locator("text=Total Options").click(timeout=3000)
+                time.sleep(2)
+            except Exception:
+                pass
+
+            try:
+                page.locator("text=Equity Index").click(timeout=3000)
+                time.sleep(2)
+            except Exception:
+                pass
+
+            # กวาดหาแถว Call และ Put 
+            rows = page.locator("tr, div").all()
             for r in rows:
                 text = r.text_content().strip()
                 cleaned_text = " ".join(text.split())
                 
-                # ค้นหาแถว Equity Index Call / Put หรือ Total Options
-                if "Call" in cleaned_text and "Options" in cleaned_text:
+                # ตรวจจับแถว Call
+                if "Call" in cleaned_text and "Options" not in cleaned_text and "Put / Call" not in cleaned_text:
                     nums = re.findall(r'\b\d{1,3}(?:,\d{3})*\b', cleaned_text)
-                    if nums:
-                        overview_data["Call"] = nums[0] # ดึงตัวเลขยอดรวม Call
-                elif "Put" in cleaned_text and "Options" in cleaned_text:
+                    if nums and overview_data["Call"] == "-":
+                        overview_data["Call"] = nums[0]
+                
+                # ตรวจจับแถว Put
+                elif "Put" in cleaned_text and "Options" not in cleaned_text and "Put / Call" not in cleaned_text:
                     nums = re.findall(r'\b\d{1,3}(?:,\d{3})*\b', cleaned_text)
-                    if nums:
-                        overview_data["Put"] = nums[0] # ดึงตัวเลขยอดรวม Put
+                    if nums and overview_data["Put"] == "-":
+                        overview_data["Put"] = nums[0]
+
         except Exception as e:
             print(f"Error TFEX Overview Options: {e}")
         finally:
@@ -125,8 +147,8 @@ def format_investor_message(tfex_data, overview_data):
         
     msg = "👥 สรุปมูลค่าการซื้อขายตามประเภทนักลงทุน (TFEX)\n\n" + "\n\n".join(investor_lines)
     
-    # เพิ่มส่วน Total Options ต่อท้ายข้อความ
-    msg += f"\n\n📈 **Total Options (Equity Index)**\n• Call: {overview_data.get('Call', '-')}\n• Put: {overview_data.get('Put', '-')}"
+    # เพิ่มส่วน Total Options แบบไม่มีเครื่องหมาย ** (สะอาดตา)
+    msg += f"\n\n📈 Total Options (Equity Index)\n• Call: {overview_data.get('Call', '-')}\n• Put: {overview_data.get('Put', '-')}"
     
     return msg
 
