@@ -23,8 +23,12 @@ def fetch_investor_type_data():
         "นักลงทุนสถาบัน": {},
         "นักลงทุนภายในประเทศ": {}
     }
+    overview_data = {
+        "Call": "-",
+        "Put": "-"
+    }
 
-    print("กำลังดึงข้อมูลประเภทนักลงทุน TFEX...")
+    print("กำลังดึงข้อมูลประเภทนักลงทุนและ Total Options TFEX...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -33,11 +37,10 @@ def fetch_investor_type_data():
         )
         page = context.new_page()
 
+        # 1. ดึงข้อมูลจากหน้า Investor Type เดิม
         try:
             page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="domcontentloaded", timeout=60000)
-            
-            # ใช้เวลาหลับเพื่อรอ Vue/React โหลดตารางแทน Selector ชั่วคราวเพื่อป้องกัน Timeout
-            time.sleep(8)
+            time.sleep(6)
             
             try:
                 page.click("button:has-text('ยอมรับ')", timeout=3000)
@@ -48,7 +51,6 @@ def fetch_investor_type_data():
             time.sleep(2)
 
             rows = page.locator("tr").all()
-            
             categories = [
                 "Equity Index Futures",
                 "Single Stock Futures",
@@ -64,20 +66,40 @@ def fetch_investor_type_data():
                 for cat in categories:
                     if cat in cleaned_text:
                         nums = re.findall(r'[-+]?\d{1,3}(?:,\d{3})*|-', cleaned_text)
-                        # คอลัมน์ที่ 3=สถาบัน, 6=ต่างชาติ, 9=ในประเทศ (ตามลำดับในตาราง)
                         if len(nums) >= 9:
                             tfex_data["นักลงทุนสถาบัน"][cat] = format_number_with_sign(nums[2])
                             tfex_data["นักลงทุนต่างชาติ"][cat] = format_number_with_sign(nums[5])
                             tfex_data["นักลงทุนภายในประเทศ"][cat] = format_number_with_sign(nums[8])
-
         except Exception as e:
             print(f"Error TFEX Investor Type: {e}")
+
+        # 2. ดึงข้อมูล Total Options (Call / Put) จากหน้า Overview ตามลิงก์ที่ให้มา
+        try:
+            page.goto("https://www.settrade.com/th/derivatives/overview", wait_until="domcontentloaded", timeout=60000)
+            time.sleep(5)
+            
+            rows = page.locator("tr").all()
+            for r in rows:
+                text = r.text_content().strip()
+                cleaned_text = " ".join(text.split())
+                
+                # ค้นหาแถว Equity Index Call / Put หรือ Total Options
+                if "Call" in cleaned_text and "Options" in cleaned_text:
+                    nums = re.findall(r'\b\d{1,3}(?:,\d{3})*\b', cleaned_text)
+                    if nums:
+                        overview_data["Call"] = nums[0] # ดึงตัวเลขยอดรวม Call
+                elif "Put" in cleaned_text and "Options" in cleaned_text:
+                    nums = re.findall(r'\b\d{1,3}(?:,\d{3})*\b', cleaned_text)
+                    if nums:
+                        overview_data["Put"] = nums[0] # ดึงตัวเลขยอดรวม Put
+        except Exception as e:
+            print(f"Error TFEX Overview Options: {e}")
         finally:
             browser.close()
 
-    return tfex_data
+    return tfex_data, overview_data
 
-def format_investor_message(tfex_data):
+def format_investor_message(tfex_data, overview_data):
     groups = [
         ("🌐 นักลงทุนต่างชาติ", "นักลงทุนต่างชาติ"),
         ("🏦 นักลงทุนสถาบัน", "นักลงทุนสถาบัน"),
@@ -101,7 +123,12 @@ def format_investor_message(tfex_data):
             lines.append(f"• {cat}: {val}")
         investor_lines.append("\n".join(lines))
         
-    return "👥 สรุปมูลค่าการซื้อขายตามประเภทนักลงทุน (TFEX)\n\n" + "\n\n".join(investor_lines)
+    msg = "👥 สรุปมูลค่าการซื้อขายตามประเภทนักลงทุน (TFEX)\n\n" + "\n\n".join(investor_lines)
+    
+    # เพิ่มส่วน Total Options ต่อท้ายข้อความ
+    msg += f"\n\n📈 **Total Options (Equity Index)**\n• Call: {overview_data.get('Call', '-')}\n• Put: {overview_data.get('Put', '-')}"
+    
+    return msg
 
 def send_line_message(message):
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
@@ -122,6 +149,6 @@ def send_line_message(message):
     print(f"--- LINE API RESULT --- Status: {res.status_code}")
 
 if __name__ == "__main__":
-    tfex_data = fetch_investor_type_data()
-    msg = format_investor_message(tfex_data)
+    tfex_data, overview_data = fetch_investor_type_data()
+    msg = format_investor_message(tfex_data, overview_data)
     send_line_message(msg)
