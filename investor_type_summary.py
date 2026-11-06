@@ -37,7 +37,6 @@ def fetch_investor_type_data():
         )
         page = context.new_page()
 
-        # 1. ดึงข้อมูลหน้า Investor Type ปกติ
         try:
             page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="domcontentloaded", timeout=60000)
             time.sleep(6)
@@ -73,7 +72,6 @@ def fetch_investor_type_data():
         except Exception as e:
             print(f"Error TFEX Investor Type: {e}")
 
-        # 2. ดึงข้อมูลหน้า Overview เจาะจงเฉพาะกลุ่ม Equity Index เท่านั้น
         try:
             page.goto("https://www.settrade.com/th/derivatives/overview", wait_until="domcontentloaded", timeout=60000)
             time.sleep(6)
@@ -83,7 +81,6 @@ def fetch_investor_type_data():
             except Exception:
                 pass
 
-            # คลิกเปิดเมนู Total Options และ Equity Index อัตโนมัติ
             page.evaluate("""() => {
                 const elements = Array.from(document.querySelectorAll('*'));
                 elements.forEach(el => {
@@ -95,7 +92,6 @@ def fetch_investor_type_data():
             }""")
             time.sleep(3)
 
-            # ใช้ JS ค้นหาแถว Call / Put ที่อยู่ใต้หัวข้อ Equity Index เท่านั้น
             overview_data = page.evaluate("""() => {
                 let callVal = "-";
                 let putVal = "-";
@@ -182,7 +178,7 @@ def send_line_message(message):
         "messages": [{"type": "text", "text": message}]
     }
     res = requests.post(url, headers=headers, json=payload)
-    print(f"--- LINE API RESULT --- Status: {res.status_code}")
+    print(f"--- LINE API RESULT TFEX --- Status: {res.status_code}")
 
 if __name__ == "__main__":
     tfex_data, overview_data = fetch_investor_type_data()
