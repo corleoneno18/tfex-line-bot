@@ -37,7 +37,6 @@ def fetch_equity_index_data():
             except Exception:
                 pass
 
-            # ตรวจสอบว่าเลือก Tab 'SET' อยู่
             try:
                 set_tab = page.locator("button:has-text('SET'), a:has-text('SET')").first
                 if set_tab.is_visible():
@@ -46,27 +45,23 @@ def fetch_equity_index_data():
             except Exception:
                 pass
 
-            # หาตำแหน่งคอลัมน์ "สุทธิ" ของกลุ่ม "รายวัน"
             target_col_index = -1
             header_rows = page.locator("table thead tr").all()
             
             if len(header_rows) >= 2:
-                # แถวล่างสุดของ Header จะมีคำว่า "สุทธิ" ซ้ำกันหลายช่วง (รายวัน, รายเดือน, ต้นปี)
                 bottom_headers = header_rows[-1].locator("th, td").all()
                 net_count = 0
                 for idx, h in enumerate(bottom_headers):
                     text = h.text_content().strip()
                     if "สุทธิ" in text:
                         net_count += 1
-                        if net_count == 1: # สุทธิอันแรก = สุทธิรายวัน
+                        if net_count == 1:
                             target_col_index = idx
                             break
 
-            # หากระหา Index ไม่เจอ ให้ใช้ Default index สำรอง
             if target_col_index == -1:
                 target_col_index = 4
 
-            # ดึงข้อมูลจาก Body ตาม Index ที่ระบุ
             rows = page.locator("table tbody tr").all()
             for r in rows:
                 tds = r.locator("td").all()
@@ -117,7 +112,7 @@ def send_line_message(message):
         "messages": [{"type": "text", "text": message}]
     }
     res = requests.post(url, headers=headers, json=payload)
-    print(f"--- LINE API RESULT --- Status: {res.status_code}")
+    print(f"--- LINE API RESULT SET --- Status: {res.status_code}")
 
 if __name__ == "__main__":
     data = fetch_equity_index_data()
