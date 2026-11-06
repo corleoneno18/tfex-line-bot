@@ -1,10 +1,9 @@
 name: Run Investor Bots
 
 on:
-  workflow_dispatch: # ปุ่มสำหรับกดรันด้วยตนเอง
+  workflow_dispatch:
   schedule:
-    # 12:00 UTC = 19:00 น. (เวลาประเทศไทย UTC+7)
-    # 1-5 หมายถึง วันจันทร์ ถึง วันศุกร์
+    # 12:00 UTC = 19:00 น. เวลาไทย (จันทร์ - ศุกร์)
     - cron: '0 12 * * 1-5'
 
 jobs:
