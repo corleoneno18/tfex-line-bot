@@ -3,7 +3,7 @@ name: Run Investor Bots
 on:
   workflow_dispatch:
   schedule:
-    # 12:00 UTC = 19:00 น. เวลาไทย (จันทร์ - ศุกร์)
+    # 12:00 UTC = 19:00 น. เวลาไทย (วันจันทร์ - ศุกร์)
     - cron: '0 12 * * 1-5'
 
 jobs:
