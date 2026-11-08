@@ -27,8 +27,14 @@ def fetch_investor_type_data():
         "Call": "-",
         "Put": "-"
     }
+    set50_data = {
+        "latest": "-",
+        "change": "-",
+        "volume": "-",
+        "value": "-"
+    }
 
-    print("กำลังดึงข้อมูลประเภทนักลงทุนและ Total Options TFEX...")
+    print("กำลังดึงข้อมูล TFEX, Total Options และ SET50 Index...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -37,6 +43,7 @@ def fetch_investor_type_data():
         )
         page = context.new_page()
 
+        # 1. ดึงข้อมูลประเภทนักลงทุน TFEX
         try:
             page.goto("https://www.settrade.com/th/derivatives/market-data/investor-type", wait_until="domcontentloaded", timeout=60000)
             time.sleep(6)
@@ -72,6 +79,7 @@ def fetch_investor_type_data():
         except Exception as e:
             print(f"Error TFEX Investor Type: {e}")
 
+        # 2. ดึงข้อมูล Total Options (Equity Index)
         try:
             page.goto("https://www.settrade.com/th/derivatives/overview", wait_until="domcontentloaded", timeout=60000)
             time.sleep(6)
@@ -125,15 +133,48 @@ def fetch_investor_type_data():
                 }
                 return { Call: callVal, Put: putVal };
             }""")
-
         except Exception as e:
             print(f"Error TFEX Overview Options: {e}")
+
+        # 3. ดึงข้อมูล SET50 Index (ล่าสุด, เปลี่ยนแปลง, ปริมาณ, มูลค่า)
+        try:
+            page.goto("https://www.settrade.com/th/equities/market-summary/overview", wait_until="domcontentloaded", timeout=60000)
+            time.sleep(6)
+
+            try:
+                page.click("button:has-text('ยอมรับ')", timeout=3000)
+            except Exception:
+                pass
+
+            set50_data = page.evaluate("""() => {
+                let result = { latest: "-", change: "-", volume: "-", value: "-" };
+                const rows = Array.from(document.querySelectorAll('tr'));
+                for (let r of rows) {
+                    const text = r.innerText || "";
+                    if (text.includes("SET50") && !text.includes("SET50FF") && !text.includes("SET50")) {
+                        // ปรับค้นหาแถวที่เป็น SET50 โดยตรง
+                    }
+                    if (text.startsWith("SET50\\t") || text.startsWith("SET50 ") || text.includes("SET50")) {
+                        const tds = Array.from(r.querySelectorAll('td')).map(td => td.innerText.trim());
+                        if (tds.length >= 7 && tds[0] === "SET50") {
+                            result.latest = tds[1] || "-";
+                            result.change = (tds[2] && tds[3]) ? `${tds[2]} (${tds[3]})` : (tds[2] || "-");
+                            result.volume = tds[5] || "-";
+                            result.value = tds[6] || "-";
+                            break;
+                        }
+                    }
+                }
+                return result;
+            }""")
+        except Exception as e:
+            print(f"Error SET50 Overview: {e}")
         finally:
             browser.close()
 
-    return tfex_data, overview_data
+    return tfex_data, overview_data, set50_data
 
-def format_investor_message(tfex_data, overview_data):
+def format_investor_message(tfex_data, overview_data, set50_data):
     groups = [
         ("🌐 นักลงทุนต่างชาติ", "นักลงทุนต่างชาติ"),
         ("🏦 นักลงทุนสถาบัน", "นักลงทุนสถาบัน"),
@@ -158,7 +199,18 @@ def format_investor_message(tfex_data, overview_data):
         investor_lines.append("\n".join(lines))
         
     msg = "👥 สรุปมูลค่าการซื้อขายตามประเภทนักลงทุน (TFEX)\n\n" + "\n\n".join(investor_lines)
+    
+    # เพิ่มส่วน Total Options
     msg += f"\n\n📈 Total Options (Equity Index)\n• Call: {overview_data.get('Call', '-')}\n• Put: {overview_data.get('Put', '-')}"
+    
+    # เพิ่มส่วน SET50 Index ต่อท้าย
+    msg += (
+        f"\n\n📊 SET50 Index\n"
+        f"• ล่าสุด: {set50_data.get('latest', '-')}\n"
+        f"• เปลี่ยนแปลง: {set50_data.get('change', '-')}\n"
+        f"• ปริมาณ (หุ้น): {set50_data.get('volume', '-')}\n"
+        f"• มูลค่า (ลบ.): {set50_data.get('value', '-')}"
+    )
     
     return msg
 
@@ -181,6 +233,6 @@ def send_line_message(message):
     print(f"--- LINE API RESULT TFEX --- Status: {res.status_code}")
 
 if __name__ == "__main__":
-    tfex_data, overview_data = fetch_investor_type_data()
-    msg = format_investor_message(tfex_data, overview_data)
+    tfex_data, overview_data, set50_data = fetch_investor_type_data()
+    msg = format_investor_message(tfex_data, overview_data, set50_data)
     send_line_message(msg)
