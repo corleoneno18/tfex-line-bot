@@ -3,8 +3,8 @@ name: Run Investor Bots
 on:
   workflow_dispatch:
   schedule:
-    # 12:00 UTC = 19:00 น. เวลาไทย (วันจันทร์ - ศุกร์)
-    - cron: '0 12 * * 1-5'
+    # 11:30 UTC = 18:30 น. เวลาไทย (เผื่อเวลา GitHub คิวดีเลย์ 15-30 นาที ข้อความจะเข้าช่วง 18:45 - 19:00 น.)
+    - cron: '30 11 * * 1-5'
 
 jobs:
   run-bots:
